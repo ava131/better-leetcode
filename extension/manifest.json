@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "LeetCode AI 陪练",
+  "version": "0.3.0",
+  "description": "把题干、你的代码和判题结果自动送进对话，不用再复制粘贴。",
+  "minimum_chrome_version": "111",
+
+  "permissions": ["storage"],
+  "host_permissions": ["https://leetcode.cn/*", "http://127.0.0.1:8787/*"],
+
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://leetcode.cn/problems/*"],
+      "js": ["src/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://leetcode.cn/problems/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_title": "LeetCode AI 陪练"
+  }
+}

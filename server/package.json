@@ -1,0 +1,17 @@
+{
+  "name": "better-leetcode-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LeetCode AI 陪练 · 本地后端（Node 24，零依赖）",
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "dry": "node src/cli.ts --dry-run",
+    "ask": "node src/cli.ts",
+    "test": "rm -f .dev-memory.db* && MEMORY_DB=./.dev-memory.db node test/smoke.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

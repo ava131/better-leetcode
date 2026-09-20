@@ -34,7 +34,9 @@
       document.documentElement.setAttribute("data-bl-nonce", NONCE);
     } catch {}
     try {
-      window.postMessage({ __bl: TAG, nonce: NONCE, type, payload }, window.location.origin);
+      // origin 可能是字符串 "null"（about:blank / 沙箱 iframe），不能直接当 targetOrigin
+      const o = window.location.origin;
+      window.postMessage({ __bl: TAG, nonce: NONCE, type, payload }, o && o !== "null" ? o : "*");
     } catch {}
   }
 

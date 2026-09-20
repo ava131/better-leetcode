@@ -595,6 +595,9 @@ LLM 回复里带 <memory>{...}</memory>
 | **★25** | 自带 markdown 渲染器只处理了代码块/行内码/粗体，**列表、标题、引用、表格全都没渲染**，用户看到的是 `- xxx`、`### xxx` 原文 | 补全渲染器并抽成 `extension/src/markdown.js`（content_scripts 多文件共享作用域，所以能拆），配 40 项单测 |
 | **★26** | **代码块是在转义之前被摘出来的，所以它的内容从未被转义** —— 忘了补 esc 就是一个 XSS 洞（模型输出含 `<script>` 的代码块可直接注入） | 还原代码块时必须再 esc 一次。单测「代码块里的标签也转义」就是守这条 |
 | **★27** | 依赖 `pointerup` 保存状态不可靠（指针出窗口/被抢走就丢） | 拖动过程中就**防抖保存**，并挂 `pointerup` / `pointercancel` / window `mouseup` / `blur` 多重收尾 |
+| **★30** | 「鼠标移开就收起」是**错的交互** —— 鼠标划过面板不算离开，读长答案时会被反复打断 | 改成**失焦收起**：`document` 上挂 capture 的 `pointerdown`，用 `composedPath()` 判断点是否在面板内（能穿透 Shadow DOM），在外面才收 |
+| **★28** | **`location.origin` 可能是字符串 `"null"`**（about:blank / 沙箱 iframe），直接当 `postMessage` 的 targetOrigin 会抛 `SyntaxError: Invalid target origin 'null'` | 判断 `o && o !== "null"`，否则退化成 `"*"`。消息本来就没离开这个 window，安全性由 nonce 保证 |
+| **★29** | 大段"整块替换"式的补丁会**静默删掉中间的函数** —— 一次替换把 content.js 从 1209 行砍到 721 行（渲渲染/会话/发送全没了），语法检查还过，只有浏览器控制台报 `ReferenceError` | 重构必须**分小步**，每步 `assert count == 1` + 复查行数和关键函数是否存在。**排查这类问题要看浏览器异常，不要靠读代码猜** —— 用 CDP 的 `Runtime.exceptionThrown` |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |

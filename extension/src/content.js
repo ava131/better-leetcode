@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.4.0";
+  const VER = "0.5.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -57,8 +57,12 @@
     run: null,
     /** 最近一次动作："run" | "submit"，决定状态条优先显示谁 */
     lastAction: null,
-    /** 鼠标移开自动收起（默认关，点标题栏的 ⇥ 开） */
-    autoHide: false,
+    /** 点到力扣界面（面板之外）时收起。默认开 */
+    collapseOnBlur: true,
+    /** 吸附在哪一侧："left" | "right" */
+    side: "right",
+    /** 面板顶边位置（纵向保留，横向交给 side） */
+    panelTop: 60,
     /** 用户拖出来的面板尺寸 */
     panelSize: null,
     /** 当前选中的模型（空 = 用后端的默认值） */
@@ -75,6 +79,25 @@
   function slugFromPath() {
     const m = location.pathname.match(/\/problems\/([^/]+)/);
     return m ? m[1] : null;
+  }
+
+  /**
+   * 向自己所在的 window 发消息。
+   *
+   * ★ 坑：在 about:blank / 沙箱 iframe 里 `location.origin` 是字符串 "null"，
+   *   直接当 targetOrigin 传会抛 `SyntaxError: Invalid target origin 'null'`。
+   *   消息本来就没离开这个 window，安全性靠 nonce 保证，所以退化成 "*" 没问题。
+   */
+  function postToSelf(msg) {
+    const o = location.origin;
+    const target = o && o !== "null" ? o : "*";
+    try {
+      window.postMessage(msg, target);
+    } catch {
+      try {
+        window.postMessage(msg, "*");
+      } catch {}
+    }
   }
 
   /**
@@ -102,15 +125,24 @@
   const CSS = `
 :host { all: initial; }
 * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
-.wrap { position: fixed; top: 60px; right: 12px; width: 380px; max-height: calc(100vh - 90px);
+.wrap { position: fixed; top: 60px; width: 380px; max-height: calc(100vh - 90px);
   min-width: 300px; display: flex; flex-direction: column; background: #fff; border: 1px solid #e5e7eb;
   border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.14); z-index: 2147483000;
   overflow: hidden; font-size: 13px; color: #111827; }
+/* 靠哪一边：拖动后自动吸附到最近一侧 */
+.wrap.side-right { right: 12px; }
+.wrap.side-left  { left: 12px; }
+.wrap.dragging { box-shadow: 0 14px 44px rgba(0,0,0,.22); opacity: .96; }
+.wrap.dragging .hd { cursor: grabbing; }
 /* 左下角的尺寸把手（面板贴右边，所以往左拖是变宽） */
-.grip { position: absolute; left: 0; bottom: 0; width: 18px; height: 18px;
-  cursor: nesw-resize; touch-action: none; z-index: 2; }
-.grip::after { content: ""; position: absolute; left: 4px; bottom: 4px; width: 7px; height: 7px;
-  border-left: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; border-radius: 0 0 0 3px; opacity: .8; }
+.grip { position: absolute; bottom: 0; width: 18px; height: 18px; touch-action: none; z-index: 2; }
+.wrap.side-right .grip { left: 0; cursor: nesw-resize; }
+.wrap.side-left  .grip { right: 0; cursor: nwse-resize; }
+.grip::after { content: ""; position: absolute; bottom: 4px; width: 7px; height: 7px; opacity: .8; }
+.wrap.side-right .grip::after { left: 4px;
+  border-left: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; border-radius: 0 0 0 3px; }
+.wrap.side-left .grip::after { right: 4px;
+  border-right: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; border-radius: 0 0 3px 0; }
 .grip:hover::after { border-color: #2563eb; opacity: 1; }
 @media (prefers-color-scheme: dark) {
   .wrap { background: #1f2937; border-color: #374151; color: #f3f4f6; }
@@ -124,12 +156,14 @@
 }
 .wrap.collapsed { display: none; }
 
-.ball { position: fixed; right: 18px; bottom: 90px; width: 46px; height: 46px; border-radius: 13px;
+.ball { position: fixed; width: 46px; height: 46px; border-radius: 13px;
   background: linear-gradient(135deg, #4D6BFE 0%, #6D5BFF 100%);
   color: #fff; display: none; align-items: center; justify-content: center;
   cursor: grab; box-shadow: 0 4px 16px rgba(77,107,254,.42); z-index: 2147483000;
   border: none; padding: 0; user-select: none; touch-action: none; }
 .ball.show { display: flex; }
+.ball.side-right { right: 18px; }
+.ball.side-left  { left: 18px; }
 .ball:active { cursor: grabbing; }
 .ball.dragging { box-shadow: 0 8px 28px rgba(77,107,254,.55); transform: scale(1.06); }
 .ball svg { width: 26px; height: 26px; pointer-events: none; }
@@ -141,7 +175,7 @@
 .ball .dot.show { display: block; }
 
 .hd { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e5e7eb;
-  background: #f9fafb; flex: 0 0 auto; }
+  background: #f9fafb; flex: 0 0 auto; cursor: grab; user-select: none; touch-action: none; }
 .hd .ttl { font-weight: 600; font-size: 13px; flex: 1; }
 .hd .ver { font-weight: 400; font-size: 10px; color: #9ca3af; font-family: ui-monospace, monospace; }
 .hd .model { border: 1px solid #d1d5db; background: #fff; color: #4b5563; border-radius: 5px;
@@ -263,7 +297,7 @@
       <div class="hd">
         <span class="ttl">AI 陪练 <span class="ver">v${VER}</span></span>
         <select class="model" title="切换模型"></select>
-        <button data-act="pin" title="自动隐藏：鼠标移开就收起">⇥</button>
+        <button data-act="pin" title="点力扣界面时收起">⇤</button>
         <button data-act="clear" title="清空对话">⟲</button>
         <button data-act="collapse" title="收起">—</button>
       </div>
@@ -342,44 +376,59 @@
       window.addEventListener("blur", up);
     });
 
-    // ── 自动隐藏：鼠标移开一会就收起 ──
-    let hideTimer = null;
-    const cancelHide = () => {
-      if (hideTimer) {
-        clearTimeout(hideTimer);
-        hideTimer = null;
-      }
+    // ── 拖动面板：拖标题栏 ──
+    const hdEl = root.querySelector(".hd");
+    let panDrag = null;
+    hdEl.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button, select")) return; // 别抢按钮/下拉的交互
+      const r = wrap.getBoundingClientRect();
+      panDrag = { dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width };
+      try {
+        hdEl.setPointerCapture(e.pointerId);
+      } catch {}
+      wrap.classList.add("dragging");
+      e.preventDefault();
+    });
+    hdEl.addEventListener("pointermove", (e) => {
+      if (!panDrag) return;
+      const x = Math.min(Math.max(4, e.clientX - panDrag.dx), window.innerWidth - panDrag.w - 4);
+      const y = Math.min(Math.max(4, e.clientY - panDrag.dy), window.innerHeight - 60);
+      wrap.style.left = x + "px";
+      wrap.style.right = "auto";
+      wrap.style.top = y + "px";
+    });
+    const endPan = () => {
+      if (!panDrag) return;
+      panDrag = null;
+      wrap.classList.remove("dragging");
+      snapToSide();
     };
-    const scheduleHide = () => {
-      if (!S.autoHide || S.collapsed) return;
-      cancelHide();
-      hideTimer = setTimeout(() => {
-        hideTimer = null;
-        // 这些情况下不收：正在流式输出、正在打字、有待确认的记忆卡片
-        if (S.streaming || S.collapsed) return;
-        if (inputEl.value.trim()) return;
-        if (bodyEl.querySelector(".card")) return;
+    hdEl.addEventListener("pointerup", endPan);
+    hdEl.addEventListener("pointercancel", endPan);
+    window.addEventListener("mouseup", endPan);
+    window.addEventListener("blur", endPan);
+
+    // ── 点到面板外面就收起 ──
+    //
+    // 这**不是**"鼠标移开就收" —— 鼠标划过不算离开，那样读答案时会被反复打断。
+    // 只有用户真的去点力扣界面（编辑器、题面…）才收。
+    document.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!S.collapseOnBlur || S.collapsed) return;
+        // composedPath 能穿透 Shadow DOM：点在面板里的话 host 一定在路径上
+        const path = ev.composedPath ? ev.composedPath() : [];
+        if (path.includes(host)) return;
         setCollapsed(true);
-      }, 900);
-    };
-    wrap.addEventListener("mouseenter", cancelHide);
-    wrap.addEventListener("mouseleave", scheduleHide);
-    inputEl.addEventListener("focus", cancelHide);
-    inputEl.addEventListener("blur", scheduleHide);
-    ball.addEventListener("mouseenter", cancelHide);
+      },
+      true
+    );
 
     pinEl.addEventListener("click", () => {
-      S.autoHide = !S.autoHide;
+      S.collapseOnBlur = !S.collapseOnBlur;
       applyPinUI();
-      try {
-        chrome.storage?.local.set({ blAutoHide: S.autoHide });
-      } catch {}
-      if (S.autoHide) {
-        say("system", "自动隐藏已开 —— 鼠标移开约 1 秒后收起");
-        scheduleHide();
-      } else {
-        say("system", "自动隐藏已关");
-      }
+      saveLayout();
+      say("system", S.collapseOnBlur ? "已开：点力扣界面时收起" : "已关：点外部不收起");
     });
 
     modelEl.addEventListener("change", () => {
@@ -396,7 +445,8 @@
       renderMessages();
       say("system", "对话已清空（记忆不受影响）");
     };
-    // 拖动 + 点击。用位移阈值区分两者，避免"拖完顺手跳开侧边栏"
+    // 拖动小球 + 点击。用位移阈值区分两者，避免"拖完顺手跳开侧边栏"。
+    // 横向松手后吸附到最近一侧，纵向位置保留。
     let drag = null;
     ball.addEventListener("pointerdown", (e) => {
       const r = ball.getBoundingClientRect();
@@ -413,32 +463,29 @@
       const x = Math.min(Math.max(0, e.clientX - drag.dx), window.innerWidth - ball.offsetWidth);
       const y = Math.min(Math.max(0, e.clientY - drag.dy), window.innerHeight - ball.offsetHeight);
       ball.style.left = x + "px";
-      ball.style.top = y + "px";
       ball.style.right = "auto";
-      ball.style.bottom = "auto";
+      ball.style.top = y + "px";
     });
     const endDrag = () => {
       if (!drag) return;
       const moved = drag.moved;
       drag = null;
       ball.classList.remove("dragging");
-      if (moved) saveBallPos();
-      else setCollapsed(false);
+      if (moved) {
+        const r = ball.getBoundingClientRect();
+        S.side = r.left + r.width / 2 < window.innerWidth / 2 ? "left" : "right";
+        S.ballTop = Math.round(Math.min(Math.max(4, r.top), window.innerHeight - 60));
+        ball.style.left = "";
+        ball.style.right = "";
+        applySide();
+        applyBallLayout();
+        saveLayout();
+      } else {
+        setCollapsed(false);
+      }
     };
     ball.addEventListener("pointerup", endDrag);
     ball.addEventListener("pointercancel", endDrag);
-
-    sendEl.onclick = send;
-    inputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        send();
-      }
-    });
-    inputEl.addEventListener("input", () => {
-      inputEl.style.height = "auto";
-      inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
-    });
 
     document.addEventListener(
       "keydown",
@@ -453,20 +500,69 @@
     );
   }
 
-  function applyPinUI() {
-    if (!pinEl) return;
-    pinEl.classList.toggle("on", !!S.autoHide);
-    pinEl.title = S.autoHide ? "自动隐藏：已开（点一下关掉）" : "自动隐藏：已关（点一下开启）";
-    pinEl.textContent = S.autoHide ? "⇤" : "⇥";
+  function applySide() {
+    const left = S.side === "left";
+    wrap.classList.toggle("side-left", left);
+    wrap.classList.toggle("side-right", !left);
+    ball.classList.toggle("side-left", left);
+    ball.classList.toggle("side-right", !left);
   }
 
-  function applyPanelSize(size) {
-    if (!size || !Number.isFinite(size.w) || !Number.isFinite(size.h)) return;
-    const w = Math.min(Math.max(300, size.w), window.innerWidth - 40);
-    const h = Math.min(Math.max(320, size.h), window.innerHeight - 40);
-    wrap.style.width = w + "px";
-    wrap.style.height = h + "px";
-    wrap.style.maxHeight = "none";
+  function applyPinUI() {
+    if (!pinEl) return;
+    pinEl.classList.toggle("on", !!S.collapseOnBlur);
+    pinEl.title = S.collapseOnBlur ? "点力扣界面时收起：已开" : "点力扣界面时收起：已关";
+    pinEl.textContent = S.collapseOnBlur ? "⇤" : "⇥";
+  }
+
+  /** 面板：纵向位置 + 尺寸。横向由 side 类决定 */
+  function applyPanelLayout() {
+    wrap.style.top = Math.max(4, S.panelTop || 60) + "px";
+    if (S.panelSize) {
+      const w = Math.min(Math.max(300, S.panelSize.w), window.innerWidth - 40);
+      const h = Math.min(Math.max(320, S.panelSize.h), window.innerHeight - 40);
+      wrap.style.width = w + "px";
+      wrap.style.height = h + "px";
+      wrap.style.maxHeight = "none";
+    }
+  }
+
+  /** 小球：只记纵向。横向跟着 side 走 */
+  function applyBallLayout() {
+    const fallback = window.innerHeight - 140;
+    const top = Number.isFinite(S.ballTop) ? S.ballTop : fallback;
+    S.ballTop = Math.round(Math.min(Math.max(4, top), window.innerHeight - 60));
+    ball.style.top = S.ballTop + "px";
+    ball.style.left = "";
+    ball.style.right = "";
+  }
+
+  /**
+   * 松手后吸附到最近的一侧。
+   * 面板和小球**共用** S.side —— 一起拖、一起靠边，不会一个左一个右。
+   */
+  function snapToSide() {
+    const r = wrap.getBoundingClientRect();
+    S.side = r.left + r.width / 2 < window.innerWidth / 2 ? "left" : "right";
+    S.panelTop = Math.round(Math.min(Math.max(8, r.top), window.innerHeight - 80));
+    wrap.style.left = "";
+    wrap.style.right = "";
+    applySide();
+    applyPanelLayout();
+    applyBallLayout();
+    saveLayout();
+  }
+
+  function saveLayout() {
+    try {
+      chrome.storage?.local.set({
+        blSide: S.side,
+        blPanelTop: S.panelTop,
+        blPanelSize: S.panelSize,
+        blBallTop: S.ballTop,
+        blCollapseOnBlur: S.collapseOnBlur,
+      });
+    } catch {}
   }
 
   function setCollapsed(v) {
@@ -474,39 +570,14 @@
     wrap.classList.toggle("collapsed", v);
     ball.classList.toggle("show", v);
     if (!v) {
-      // 展开时把侧边栏拉回可视区
-      wrap.style.top = "";
-      wrap.style.right = "12px";
+      applySide();
+      applyPanelLayout();
       setTimeout(() => inputEl.focus(), 50);
     }
     try {
       chrome.storage?.local.set({ blCollapsed: v });
     } catch {}
   }
-
-  /** 记住小人/小球位置 */
-  function saveBallPos() {
-    const x = parseFloat(ball.style.left);
-    const y = parseFloat(ball.style.top);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    try {
-      chrome.storage?.local.set({ blBallPos: { x, y, w: window.innerWidth, h: window.innerHeight } });
-    } catch {}
-  }
-
-  function applyBallPos(pos) {
-    if (!pos || !Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return;
-    // 换窗口尺寸后如果跑到屏幕外，就放弃保存的位置
-    const x = Math.min(pos.x, window.innerWidth - 46);
-    const y = Math.min(pos.y, window.innerHeight - 46);
-    if (x < 0 || y < 0) return;
-    ball.style.left = x + "px";
-    ball.style.top = y + "px";
-    ball.style.right = "auto";
-    ball.style.bottom = "auto";
-  }
-
-  // ───────────────────────── 渲染 ─────────────────────────
 
   function statusLine() {
     if (!S.backendOk) {
@@ -734,13 +805,13 @@
         }
       };
       window.addEventListener("message", handler);
-      window.postMessage({ __bl: TAG, nonce: readNonce(), type: "read_code" }, location.origin);
+      postToSelf({ __bl: TAG, nonce: readNonce(), type: "read_code" });
     });
   }
 
   /** 让拦截器读一次题面。力扣题面是 SSR 的，必须主动要，不能靠监听。 */
   function requestProblem() {
-    window.postMessage({ __bl: TAG, nonce: readNonce(), type: "read_problem" }, location.origin);
+    postToSelf({ __bl: TAG, nonce: readNonce(), type: "read_problem" });
   }
 
   /**
@@ -750,7 +821,7 @@
    * nonce 校验丢掉，插件表现为"完全没反应"。
    */
   function handshake() {
-    window.postMessage({ __bl: TAG, nonce: readNonce(), type: "hello" }, location.origin);
+    postToSelf({ __bl: TAG, nonce: readNonce(), type: "hello" });
   }
 
   let sending = false;
@@ -1083,16 +1154,23 @@
       const st = await chrome.storage.local.get([
         "blCollapsed",
         "blModel",
-        "blBallPos",
-        "blAutoHide",
+        "blSide",
+        "blPanelTop",
         "blPanelSize",
+        "blBallTop",
+        "blCollapseOnBlur",
       ]);
-      setCollapsed(!!st.blCollapsed);
       if (st.blModel) S.model = st.blModel;
-      S.autoHide = !!st.blAutoHide;
+      if (st.blSide === "left" || st.blSide === "right") S.side = st.blSide;
+      if (Number.isFinite(st.blPanelTop)) S.panelTop = st.blPanelTop;
+      if (st.blPanelSize) S.panelSize = st.blPanelSize;
+      if (Number.isFinite(st.blBallTop)) S.ballTop = st.blBallTop;
+      S.collapseOnBlur = st.blCollapseOnBlur !== false; // 默认开
+      applySide();
       applyPinUI();
-      applyPanelSize(st.blPanelSize);
-      applyBallPos(st.blBallPos);
+      applyPanelLayout();
+      applyBallLayout();
+      setCollapsed(!!st.blCollapsed);
     } catch {}
 
     // 恢复上次的会话（题面/代码/判题结果/对话）。storage.session 是纯内存的，

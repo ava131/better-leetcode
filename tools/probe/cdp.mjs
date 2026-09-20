@@ -52,6 +52,8 @@ export class CDP {
     this.id = 0;
     this.pending = new Map();
     this.events = [];
+    /** 执行上下文。★ 每次导航都会新建隔离上下文，旧的会失效，所以要跟踪生死 */
+    this.contexts = [];
   }
 
   static async connect(wsUrl) {
@@ -68,6 +70,10 @@ export class CDP {
         c.pending.delete(m.id);
         m.error ? rej(new Error(JSON.stringify(m.error))) : res(m.result);
       } else if (m.method) {
+        if (m.method === "Runtime.executionContextCreated") c.contexts.push(m.params.context);
+        else if (m.method === "Runtime.executionContextDestroyed")
+          c.contexts = c.contexts.filter((x) => x.id !== m.params.executionContextId);
+        else if (m.method === "Runtime.executionContextsCleared") c.contexts = [];
         c.events.push(m);
       }
     };
@@ -90,6 +96,45 @@ export class CDP {
       returnByValue: true,
     });
     if (r.exceptionDetails) return { __err: JSON.stringify(r.exceptionDetails).slice(0, 400) };
+    return r.result.value;
+  }
+
+  /** 主 frame 的 id。用来把「主文档」和「页面里的 iframe」区分开 */
+  async mainFrameId() {
+    try {
+      const { frameTree } = await this.send("Page.getFrameTree");
+      return frameTree?.frame?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 在**最新的**指定隔离 world 里求值。
+   *
+   * ★ 必须每次重新解析上下文：每次导航都会新建一个隔离上下文，
+   *   `executionContextCreated` 会攒一堆已失效的。写死一个 id 迟早会报
+   *   "Cannot find context with specified id"。
+   */
+  async evalInWorld(worldName, expression) {
+    // ★ 两个坑叠在一起：
+    //   1) `Page.addScriptToEvaluateOnNewDocument` 作用于**所有 frame**，
+    //      页面里的 iframe 也会跑一遍 content script（真实扩展默认只跑顶层）；
+    //   2) 每次导航都会新建隔离上下文，旧的会失效。
+    //   所以必须：先锁定主 frame，再取该 frame 里 id 最大的上下文。
+    const mainFrameId = await this.mainFrameId();
+    const ctx = this.contexts
+      .filter((c) => c.name === worldName && (!mainFrameId || c.auxData?.frameId === mainFrameId))
+      .sort((a, b) => a.id - b.id)
+      .pop();
+    if (!ctx) throw new Error(`主 frame 里找不到 world "${worldName}" 的存活上下文`);
+    const r = await this.send("Runtime.evaluate", {
+      expression,
+      contextId: ctx.id,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (r.exceptionDetails) return { __err: JSON.stringify(r.exceptionDetails).slice(0, 300) };
     return r.result.value;
   }
 

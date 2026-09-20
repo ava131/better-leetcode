@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.6.0";
+  const VER = "0.6.1";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -312,7 +312,7 @@
       <div class="body"></div>
       <div class="chips"></div>
       <div class="ft">
-        <textarea class="input" rows="1" placeholder="问点什么…  (⌘/Ctrl + I)"></textarea>
+        <textarea class="input" rows="1" placeholder="问点什么…  Enter 发送 · Shift+Enter 换行"></textarea>
         <button class="send">发送</button>
       </div>
       <div class="grip" title="拖动调整大小"></div>`;
@@ -494,6 +494,25 @@
     };
     ball.addEventListener("pointerup", endDrag);
     ball.addEventListener("pointercancel", endDrag);
+
+    // ── 发送 ──
+    sendEl.onclick = send;
+
+    inputEl.addEventListener("keydown", (e) => {
+      // Enter 发送，Shift+Enter 换行。
+      // 中文输入法组词时按 Enter 是"上屏"，不能当发送 ——
+      // 除了 isComposing，还要防 keyCode 229（Chrome 上组词结束的 Enter 有时
+      // isComposing 已经是 false，但 keyCode 仍是 229）。
+      if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      send();
+    });
+
+    // 输入框随内容自动撑高（上限 120px）
+    inputEl.addEventListener("input", () => {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+    });
 
     document.addEventListener(
       "keydown",

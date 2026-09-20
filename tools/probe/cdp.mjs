@@ -216,12 +216,18 @@ window.chrome = {
     },
   },
   runtime: {
-    connect: () => ({
-      onMessage: { addListener: () => {} },
-      onDisconnect: { addListener: () => {} },
-      postMessage: () => {},
-      disconnect: () => {},
-    }),
+    // 模拟后端：发一条假回复再 done，这样 sending 会复位，能连着测多次发送
+    connect: () => {
+      const handlers = [];
+      setTimeout(() => handlers.forEach((h) => h({ type: "delta", text: "（stub）" })), 60);
+      setTimeout(() => handlers.forEach((h) => h({ type: "done", chars: 6 })), 140);
+      return {
+        onMessage: { addListener: (f) => handlers.push(f) },
+        onDisconnect: { addListener: () => {} },
+        postMessage: () => {},
+        disconnect: () => {},
+      };
+    },
     getURL: (p) => "chrome-extension://stub/" + p,
     sendMessage: async (m) => {
       if (m.type === 'diag') { window.__diag.push(m.payload); }

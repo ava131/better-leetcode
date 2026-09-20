@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.5.0";
+  const VER = "0.6.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -157,7 +157,7 @@
 .wrap.collapsed { display: none; }
 
 .ball { position: fixed; width: 46px; height: 46px; border-radius: 13px;
-  background: linear-gradient(135deg, #4D6BFE 0%, #6D5BFF 100%);
+  background: #fff; border: 1px solid #e5e7eb; overflow: hidden;
   color: #fff; display: none; align-items: center; justify-content: center;
   cursor: grab; box-shadow: 0 4px 16px rgba(77,107,254,.42); z-index: 2147483000;
   border: none; padding: 0; user-select: none; touch-action: none; }
@@ -170,6 +170,7 @@
 .ball .ds { font-size: 17px; font-weight: 700; letter-spacing: -.6px; line-height: 1;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
   pointer-events: none; }
+.ball .pet { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
 .ball .dot { position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border-radius: 50%;
   background: #22c55e; border: 2px solid #fff; display: none; pointer-events: none; }
 .ball .dot.show { display: block; }
@@ -282,6 +283,12 @@
 
   let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl;
 
+  /** 小球的形象图。拿不到 URL 就退回文字标（测试环境里 chrome.runtime 可能是 stub） */
+  let PET = "";
+  try {
+    PET = chrome.runtime.getURL("assets/pet.jpg");
+  } catch {}
+
   function build() {
     host = document.createElement("div");
     host.id = "better-leetcode-host";
@@ -295,7 +302,7 @@
     wrap.className = "wrap";
     wrap.innerHTML = `
       <div class="hd">
-        <span class="ttl">AI 陪练 <span class="ver">v${VER}</span></span>
+        <span class="ttl">AI 刷题小助手 <span class="ver">v${VER}</span></span>
         <select class="model" title="切换模型"></select>
         <button data-act="pin" title="点力扣界面时收起">⇤</button>
         <button data-act="clear" title="清空对话">⟲</button>
@@ -313,9 +320,10 @@
 
     ball = document.createElement("button");
     ball.className = "ball";
-    // DS 字标（圆角方形，不是圆球）
-    ball.innerHTML = `<span class="ds">DS</span><span class="dot"></span>`;
-    ball.title = "打开 AI 陪练（可拖动）";
+    ball.innerHTML = PET
+      ? `<img class="pet" alt="" src="${PET}"><span class="dot"></span>`
+      : `<span class="ds">DS</span><span class="dot"></span>`;
+    ball.title = "打开 AI 刷题小助手（可拖动）";
     root.appendChild(ball);
 
     document.documentElement.appendChild(host);

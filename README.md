@@ -1,6 +1,6 @@
-# better-leetcode
+# AI 刷题小助手（better-leetcode）
 
-一个挂在**力扣（leetcode.cn）**上的 AI 刷题陪练。
+一个挂在**力扣（leetcode.cn）**上的 AI 刷题小助手。
 
 **它不做什么**：不判题、不题库、不自动改代码。
 **它做什么**：把题干、你的代码、判题结果**自动送进对话**，让你不用再复制粘贴 —— 外加一份能跨题积累的本地记忆。
@@ -75,14 +75,14 @@ cd server && node src/index.ts
 3. 点左上角 **「加载已解压的扩展程序」**
 4. 选中项目里的 **`extension/`** 文件夹 → 确定
 
-列表里会出现「LeetCode AI 陪练」。
+列表里会出现「AI 刷题小助手」。
 
 > 改扩展代码后：回到 `chrome://extensions`，点这个扩展的 **⟳ 刷新** 按钮，再刷新力扣页面。
 
 ### 第 3 步 · 用它
 
 1. 打开任意力扣题目页，比如 <https://leetcode.cn/problems/linked-list-cycle/>
-2. 右侧出现 **「AI 陪练」** 侧边栏，顶部状态条是灰的：`○ 已就绪（未提交）`
+2. 右侧出现 **「AI 刷题小助手」** 侧边栏，顶部状态条是灰的：`○ 已就绪（未提交）`
 3. 这时就能问：**「这题有几种解法？」「思路是什么？」**
 4. 写代码，然后二选一：
 
@@ -184,7 +184,7 @@ research/
   ai-leetcode-tools.md  现有产品与官方动向调研
 server/               本地后端（Node 24，零依赖）
   .env                  ← API key 在这里（已 gitignore）
-  src/prompts/system.md   ← 陪练的 system prompt，最该改的文件
+  src/prompts/system.md   ← 小助手的 system prompt，最该改的文件
   fixtures/               真实数据 fixture
   test/smoke.ts           21 项冒烟测试
 extension/            Chrome MV3
@@ -192,6 +192,14 @@ extension/            Chrome MV3
   src/content.js         ISOLATED：侧边栏 UI
   src/background.js      service worker：只跟 localhost 说话
 ```
+
+---
+
+## 图标
+
+标题栏和小球用的是 DeepSeek 的吉祥物（鲸鱼娘），纯粹因为个人喜欢、且本项目默认接 DeepSeek。
+图标素材版权归 DeepSeek 所有，本项目与 DeepSeek 官方无关。
+换掉的话：替换 `extension/assets/pet.jpg` 和 `extension/icons/*.png` 即可。
 
 ---
 

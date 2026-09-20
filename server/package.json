@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "LeetCode AI 陪练 · 本地后端（Node 24，零依赖）",
+  "description": "AI 刷题小助手 · 本地后端（Node 24，零依赖）",
   "scripts": {
     "start": "node src/index.ts",
     "dev": "node --watch src/index.ts",

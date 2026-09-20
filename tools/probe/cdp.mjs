@@ -222,6 +222,7 @@ window.chrome = {
       postMessage: () => {},
       disconnect: () => {},
     }),
+    getURL: (p) => "chrome-extension://stub/" + p,
     sendMessage: async (m) => {
       if (m.type === 'diag') { window.__diag.push(m.payload); }
       if (m.type === 'health') return { ok: true, model: 'stub', models: ['stub'], hasKey: true, memory: { ok: true } };

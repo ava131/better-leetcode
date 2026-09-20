@@ -7,11 +7,11 @@
   "use strict";
 
   // esc / md 来自 markdown.js（content_scripts 的多个 js 共享同一作用域）
-  const { esc, md } = globalThis.__BL_MD__;
+  const { esc, md, stripMemory } = globalThis.__BL_MD__;
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.6.1";
+  const VER = "0.6.2";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -46,7 +46,6 @@
     messages: [], // 只放"说过的话" + system 标记
     collapsed: false,
     backendOk: false,
-    streaming: false,
     slug: null,
     /** 已提交、判题中（异步判题需要这个中间态） */
     judging: false,
@@ -290,6 +289,14 @@
   } catch {}
 
   function build() {
+    // 防御：同一个 document 里如果已经有面板（脚本被注入两次、或重装扩展时
+    // 旧实例还在），先清掉旧的，保证**永远只有一个**。
+    // 不清理的话会出现两个叠在一起的面板，而且旧实例的"点外部收起"
+    // 会把新面板误判成"点在面板外"。
+    try {
+      document.querySelectorAll("#better-leetcode-host").forEach((el) => el.remove());
+    } catch {}
+
     host = document.createElement("div");
     host.id = "better-leetcode-host";
     root = host.attachShadow({ mode: "open" });
@@ -424,9 +431,14 @@
       "pointerdown",
       (ev) => {
         if (!S.collapseOnBlur || S.collapsed) return;
-        // composedPath 能穿透 Shadow DOM：点在面板里的话 host 一定在路径上
+        // composedPath 能穿透 Shadow DOM：点在面板里的话 host 一定在路径上。
+        //
+        // ★ 这里按 **id** 判断而不是 `path.includes(host)`：万一脚本被注入两次、
+        //   页面上叠了两个面板，点上面那个会让下面那个的 `path.includes(host)` 为假，
+        //   于是它把自己收起来 —— 表现出来就是"一按把手面板就没了"。
+        //   按 id 判断则对重复免疫（反正长得一样，收哪个都错）。
         const path = ev.composedPath ? ev.composedPath() : [];
-        if (path.includes(host)) return;
+        if (path.some((n) => n && n.id === "better-leetcode-host")) return;
         setCollapsed(true);
       },
       true
@@ -649,7 +661,11 @@
       const bits = [];
       if (S.problem) bits.push(S.problem.title);
       bits.push(S.verdict + pass);
-      const tc = S.testcase ? `用例 ${trim(S.testcase.input, 46)} → ${trim(S.testcase.output, 18)} / 期望 ${trim(S.testcase.expected, 18)}` : "无失败用例（可能是编译错误）";
+      const tc = S.testcase
+        ? `用例 ${trim(S.testcase.input, 46)} → ${trim(S.testcase.output, 18)} / 期望 ${trim(S.testcase.expected, 18)}`
+        : /accepted|通过/i.test(S.verdict)
+        ? "全部用例通过，没有失败用例"
+        : "没拿到失败用例（可能是编译错误或超时）";
       statusEl.innerHTML = `<div class="line1"><span class="dot"></span>上下文已就绪</div>
         <div class="line2">${esc(bits.join(" · "))}</div>
         <div class="line2" title="${esc(tc)}">${esc(tc)}</div>`;
@@ -744,14 +760,16 @@
           think.remove();
         }
         buf += t;
-        content.textContent = buf;
+        // 实时剥掉 <memory>…</memory>，别让它闪出来
+        content.textContent = stripMemory(buf);
         bodyEl.scrollTop = bodyEl.scrollHeight;
       },
       finish() {
         think.remove();
-        content.innerHTML = md(buf);
+        const shown = stripMemory(buf);
+        content.innerHTML = md(shown);
         bodyEl.scrollTop = bodyEl.scrollHeight;
-        return buf;
+        return shown; // ← 返回剥过的，存进 S.messages 的也是剥过的
       },
       fail(msg) {
         think.remove();
@@ -871,6 +889,7 @@
     inputEl.value = "";
     inputEl.style.height = "auto";
     appendMessage("user", text);
+    saveSession(); // 先存一次：万一回复途中刷新，用户这句不至于丢
 
     sending = true;
     sendEl.disabled = true;
@@ -895,6 +914,25 @@
     try {
       const port = chrome.runtime.connect({ name: "chat" });
       let full = "";
+      let settled = false; // done / error / 端口断开，只认第一个
+
+      /** 无论走哪条路结束，都要把 UI 复位 —— 否则 sending 卡住就再也发不出去了 */
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        sending = false;
+        sendEl.disabled = false;
+      };
+
+      // ★ MV3 的 service worker 会被回收，端口可能毫无征兆地断掉。
+      //   不监听 onDisconnect 的话 sending 会永久为 true。
+      port.onDisconnect.addListener(() => {
+        if (!settled) {
+          bubble.fail("✗ 连接中断（后端或扩展的后台被回收了），请重试");
+          finish();
+        }
+      });
+
       port.onMessage.addListener((m) => {
         if (m.type === "thinking") {
           bubble.think(m.text);
@@ -904,25 +942,25 @@
         } else if (m.type === "memory_suggestion") {
           renderMemoryCards(m.suggestions);
         } else if (m.type === "done") {
+          if (settled) return; // 幂等：万一收到两个 done，只认第一个
           const rendered = bubble.finish();
-          S.messages.push({ role: "assistant", content: rendered });
+          // 空回复不入库（例如只有思考没有正文），否则会话里会多一条空消息
+          if (rendered.trim()) S.messages.push({ role: "assistant", content: rendered });
           saveSession();
+          finish();
           port.disconnect();
-          sending = false;
-          sendEl.disabled = false;
           inputEl.focus();
         } else if (m.type === "error") {
+          if (settled) return;
           bubble.fail("✗ " + m.message);
+          finish();
           port.disconnect();
-          sending = false;
-          sendEl.disabled = false;
         }
       });
       port.postMessage({ type: "chat", payload });
     } catch (e) {
       bubble.fail("✗ " + e.message);
-      sending = false;
-      sendEl.disabled = false;
+      finish();
     }
   }
 

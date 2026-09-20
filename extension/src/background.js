@@ -102,6 +102,12 @@ chrome.runtime.onConnect.addListener((port) => {
       const decoder = new TextDecoder();
       let buf = "";
 
+      // ★ done 只能发一次。上游的 SSE 会带一个 done 事件，循环结束后
+      //   这里还会补一个兜底的 —— 不记账的话，content.js 会收到两个 done，
+      //   于是把同一条助手回复 push 进 S.messages 两次（刷新后显示两条）。
+      let doneSent = false;
+      let errored = false; // 已经报过错就别再补 done 了
+
       while (true) {
         const { done, value } = await reader.read();
         if (done || aborted) break;
@@ -131,11 +137,19 @@ chrome.runtime.onConnect.addListener((port) => {
           else if (event === "thinking") port.postMessage({ type: "thinking", text: payload.text });
           else if (event === "memory_suggestion")
             port.postMessage({ type: "memory_suggestion", suggestions: payload.suggestions });
-          else if (event === "done") port.postMessage({ type: "done", ...payload });
-          else if (event === "error") port.postMessage({ type: "error", message: payload.message });
+          else if (event === "done") {
+            doneSent = true;
+            port.postMessage({ type: "done", ...payload });
+          }
+          else if (event === "error") {
+            errored = true;
+            port.postMessage({ type: "error", message: payload.message });
+          }
         }
       }
-      if (!aborted) port.postMessage({ type: "done", chars: 0 });
+      // 兜底：上游没给 done（例如流被截断）时补一个，好让 UI 复位
+      if (!aborted && !doneSent && !errored)
+        port.postMessage({ type: "done", chars: 0, fallback: true });
     } catch (e) {
       if (!aborted) port.postMessage({ type: "error", message: e.message });
     }

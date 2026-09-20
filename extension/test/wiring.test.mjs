@@ -17,7 +17,10 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SRC = readFileSync(resolve(HERE, "../src/content.js"), "utf8");
+const read = (f) => readFileSync(resolve(HERE, "../src", f), "utf8");
+const SRC = read("content.js");
+const BG = read("background.js");
+const IC = read("interceptor.js");
 
 let pass = 0,
   fail = 0;
@@ -121,6 +124,35 @@ console.log("\n=== 5) 没有残留的旧代码 ===");
 const STALE = ["autoHide", "scheduleHide", "cancelHide", "saveBallPos", "applyBallPos", "applyPanelSize"];
 const stale = STALE.filter((p) => SRC.includes(p));
 check("无旧 API 残留", stale.length === 0, stale.join(", "));
+
+console.log("\n=== 6) background.js：done 只能发一次 ===");
+// 上游 SSE 有自己的 done，循环结束还会补一个兜底的 —— 不记账就会发两个，
+// content.js 会把同一条助手回复 push 两遍。
+check("有 doneSent 记账", BG.includes("doneSent"));
+check("兜底的 done 受 doneSent 保护", /!doneSent\s*&&\s*!errored/.test(BG));
+check("报错后不再补 done", BG.includes("errored = true"));
+check(
+  "只有一处无条件 post done",
+  (BG.match(/port\.postMessage\(\{\s*type:\s*"done"/g) || []).length === 2,
+  (BG.match(/port\.postMessage\(\{\s*type:\s*"done"/g) || []).length
+);
+
+console.log("\n=== 7) content.js：连接异常不能把 UI 卡死 ===");
+check("监听了 port.onDisconnect", SRC.includes("port.onDisconnect.addListener"));
+check("有 settled 幂等标志", SRC.includes("settled"));
+check("done 处理里做了幂等判断", SRC.includes("if (settled) return;"));
+
+console.log("\n=== 8) interceptor.js：同一事件不能重复上报 ===");
+check("run 结果有去重集合", IC.includes("runPosted") && IC.includes("postRunOnce"));
+check(
+  "没有裸的 post(\"run\" 调用",
+  !/^\s*post\("run"/.test(IC),
+  (IC.match(/^\s*post\("run"/gm) || []).join(" | ")
+);
+
+console.log("\n=== 9) 会话里不能残留 <memory> 标签 ===");
+check("渲染层会剥掉 <memory>", SRC.includes("stripMemory"));
+check("markdown.js 导出了 stripMemory", read("markdown.js").includes("stripMemory"));
 
 console.log(`\n${"─".repeat(48)}\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

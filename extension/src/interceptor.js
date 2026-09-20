@@ -235,8 +235,11 @@
   function extractSubmission(detail, submissionId) {
     if (!detail) return null;
     const od = detail.outputDetail || {};
-    const hasCase =
-      od.input != null && (od.codeOutput != null || od.expectedOutput != null || od.lastTestcase != null);
+    // ★ 力扣对 Accepted 的提交也会返回 outputDetail，但里面全是空字符串
+    //   （不是 null）。只判断 != null 会把空壳当成失败用例，
+    //   状态条就会出现「用例 → / 期望」这种没意义的显示。
+    const nonEmpty = (v) => v != null && String(v).trim() !== "";
+    const hasCase = nonEmpty(od.input) || nonEmpty(od.lastTestcase);
 
     return {
       submissionId: submissionId ?? null,
@@ -385,12 +388,23 @@
   }
 
   /** 页面自己的 /check/ 轮询会带回运行结果 —— 被动接住，零额外请求 */
+  // ★ 运行结果有两条路会拿到：页面自己的 /check/ 轮询（被动），
+  //   以及 pollRun 的兜底轮询（主动）。两边都会命中，不记账就 post 两次。
+  const runPosted = new Set();
+
+  function postRunOnce(interpretId, r) {
+    const key = String(interpretId || "");
+    if (key && runPosted.has(key)) return;
+    if (key) runPosted.add(key);
+    post("run", r);
+  }
+
   function onRunCheckResponse(url, json) {
     if (!json || json.state !== "SUCCESS") return;
     const m = String(url).match(/\/submissions\/detail\/([^/]+)\/check/);
     if (!m || !/^runcode_/.test(m[1])) return;
     const r = extractRun(json);
-    if (r) post("run", r);
+    if (r) postRunOnce(m[1], r);
   }
 
   /** 兜底：页面没轮询到（例如它切走了），我们自己查一次 */
@@ -406,7 +420,7 @@
         if (j && j.state === "SUCCESS") {
           const r = extractRun(j);
           if (r) {
-            post("run", r);
+            postRunOnce(interpretId, r);
             return;
           }
         }

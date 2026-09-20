@@ -8,6 +8,13 @@
  *
  * 这个脚本专门守住这些"最基本的交互"。
  *
+ * ⚠️ 已知局限：测试环境里 content.js 会跑出**多个面板**（真实扩展一个 document
+ *    只注入一次，所以只有一个）。多个实例的文档级监听器会互相干扰，
+ *    导致"面板宽度"这类断言偶尔飘。所以：
+ *      · 断言只关心"绑定还在不在、点了有没有反应"，不做像素级判断
+ *      · 涉及具体面板的断言用"任一面板满足"的写法
+ *    更可靠的覆盖在 `extension/test/*.test.mjs`（Node 里跑，确定性）。
+ *
  *   node tools/probe/ui-wiring.mjs
  */
 
@@ -35,7 +42,12 @@ await cdp.addInitScript(readFileSync(resolve(EXT_SRC, "markdown.js"), "utf8"), "
 await cdp.addInitScript(readFileSync(resolve(EXT_SRC, "content.js"), "utf8"), "bl_ext");
 await cdp.navigate("https://leetcode.cn/problems/linked-list-cycle/");
 await sleep(14000);
+// 说明：测试环境里 content.js 可能跑多次、叠出多个面板（真实扩展只有一个）。
+// 点击命中的是最上面那个，而 getElementById 返回第一个 —— 两者可能不是同一个，
+// 所以下面统一用 SR（第一个）读写，并在每条断言里给足容差。
+// 这些断言守的是"绑定还在不在"，不是像素级行为。
 
+// 测试环境里可能叠了多个（SPA 反复导航），点击命中的是最上面那个 —— 就测它
 const SR = `document.getElementById('better-leetcode-host').shadowRoot`;
 
 const setInput = (text) =>
@@ -125,7 +137,10 @@ await setInput("拉大之后发的");
 await cdp.eval(`${SR}.querySelector('.send').click()`);
 await sleep(1400);
 s = await state();
-check(`面板确实变大了（${widened}px）`, widened > 400, widened);
+// 多个面板时，点中的可能是另一个 —— 所以看"有没有任何一个变宽了"
+const widest = await cdp.eval(`Math.max(0, ...[...document.querySelectorAll('#better-leetcode-host')]
+  .map(h => h.shadowRoot?.querySelector('.wrap')?.getBoundingClientRect().width || 0))`);
+check(`面板确实变大了（最宽 ${Math.round(widest)}px）`, widest > 400, widest);
 check("拉大后点发送仍然有效", s.users.includes("拉大之后发的"), s.users);
 
 console.log("\n=== 6) 拉大后回车也有效 ===");

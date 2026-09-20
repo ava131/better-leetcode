@@ -598,6 +598,12 @@ LLM 回复里带 <memory>{...}</memory>
 | **★30** | 「鼠标移开就收起」是**错的交互** —— 鼠标划过面板不算离开，读长答案时会被反复打断 | 改成**失焦收起**：`document` 上挂 capture 的 `pointerdown`，用 `composedPath()` 判断点是否在面板内（能穿透 Shadow DOM），在外面才收 |
 | **★28** | **`location.origin` 可能是字符串 `"null"`**（about:blank / 沙箱 iframe），直接当 `postMessage` 的 targetOrigin 会抛 `SyntaxError: Invalid target origin 'null'` | 判断 `o && o !== "null"`，否则退化成 `"*"`。消息本来就没离开这个 window，安全性由 nonce 保证 |
 | **★29** | 大段"整块替换"式的补丁会**静默删掉中间的函数** —— 一次替换把 content.js 从 1209 行砍到 721 行（渲渲染/会话/发送全没了），语法检查还过，只有浏览器控制台报 `ReferenceError` | 重构必须**分小步**，每步 `assert count == 1` + 复查行数和关键函数是否存在。**排查这类问题要看浏览器异常，不要靠读代码猜** —— 用 CDP 的 `Runtime.exceptionThrown` |
+| **★31** | `background.js` 的 SSE 转发会发**两个 `done`**（上游的 done + 循环结束的兜底 done）。content.js 每收到一个 done 就 push 一条助手消息 → **会话里答案变两条**，刷新后显示两遍，后续对话还带着重复 | 用一个 `doneSent` 记账，兜底那个加条件。**报错之后也不要再补 done**（`errored` 记账）——否则 error 后面跟一个 done |
+| **★32** | content.js **没监听 `port.onDisconnect`**。MV3 的 service worker 会被回收，端口可能毫无征兆地断掉 → `sending` 永久为 true → **再也发不出去**，按钮一直禁用 | 监听 onDisconnect 并把 UI 复位；用一个 `settled` 标志让 done/error/断开三者只认第一个 |
+| **★33** | **`<memory>{...}</memory>` 会显示在对话里**。后端把 SSE 的**原始增量**直接转发（那段标签也在里面），只是在最后另外发一个 `memory_suggestion` 事件；客户端已经把原文累积起来了 | 渲染层用 `stripMemory()` 剥掉。**未闭合的也要剥**（流式途中标签是一点点到的），并且要拿完整 buffer 重算，否则会丢字 |
+| **★34** | 力扣对 **Accepted 的提交也会返回 `outputDetail`**，但字段全是**空字符串**（不是 null）。只判断 `!= null` 会把空壳当失败用例，状态条显示 `用例 → / 期望` | 判断要 `!= null && trim() !== ""`。状态条文案也要区分「全部通过」和「没拿到用例」 |
+| **★35** | Node 的 **type-stripping 不支持 TS 的"参数属性"**（`constructor(public code: number)`）—— 那需要真正的转换，不是剥离，直接 `SyntaxError` | 写成显式赋值 `this.code = code`。用 Node 直跑 TS 时要注意这类"看着像类型、其实是语法"的写法 |
+| **★36** | 浏览器测试里 content.js 会**跑出多个面板**（`addScriptToEvaluateOnNewDocument` 在每个新 document 上都会跑，而真力扣加载过程会创建多个；**真实扩展一个 document 只注入一次**）。多个实例的文档级监听器互相干扰，UI 断言飘忽 | 这类断言不要做像素级判断，改成"任一面板满足"；真正需要确定性的覆盖放到 Node 单测（`extension/test/`）。**产品侧也做了防御**：失焦收起按 **id** 判断而不是 `path.includes(host)`，`build()` 会先移除已有面板 |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |

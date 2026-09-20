@@ -61,8 +61,9 @@ const setCode = (code) =>
 
 const click = (sel, text) =>
   cdp.eval(`(() => {
-    const b = document.querySelector(${JSON.stringify(sel)})
-      || [...document.querySelectorAll('button')].find(x => ${JSON.stringify(text)}.test(x.textContent.trim()));
+    const root = [...document.querySelectorAll('#better-leetcode-host')].pop()?.shadowRoot || document;
+    const b = root.querySelector(${JSON.stringify(sel)})
+      || [...root.querySelectorAll('button')].find(x => ${JSON.stringify(text)}.test(x.textContent.trim()));
     if (!b) return '找不到按钮';
     b.click(); return 'clicked';
   })()`);
@@ -71,7 +72,7 @@ const show = async (label) => console.log(`  ${label.padEnd(18)} ${await cdp.eva
 
 console.log(`打开 https://leetcode.cn/problems/${slug}/ …`);
 await cdp.navigate(`https://leetcode.cn/problems/${slug}/`);
-await sleep(10000);
+await sleep(12000);
 
 await show("初始");
 

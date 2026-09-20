@@ -181,7 +181,8 @@ export async function open({ width = 1440, height = 900 } = {}) {
  * 所以从主世界读隔离 world 建的 Shadow DOM 是可行且可靠的。
  */
 export const READ_SIDEBAR = `(() => {
-  const h = document.getElementById('better-leetcode-host');
+  // 取最上面那个（测试环境里可能叠了多个；真实扩展只有一个）
+  const h = [...document.querySelectorAll('#better-leetcode-host')].pop();
   if (!h || !h.shadowRoot) return JSON.stringify({ exists: false });
   const sr = h.shadowRoot, s = sr.querySelector('.status');
   return JSON.stringify({

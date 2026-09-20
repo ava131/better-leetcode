@@ -70,16 +70,33 @@ function json(res: ServerResponse, code: number, body: unknown) {
   res.end(s);
 }
 
+/** 带 HTTP 状态码的错误：客户端的问题报 4xx，别一律 500（否则日志里看不出原因） */
+class HttpError extends Error {
+  // 注意：Node 的 type-stripping 不支持 TS 的"参数属性"写法
+  // （constructor(public code: number)），必须显式赋值。
+  code: number;
+  constructor(code: number, msg: string) {
+    super(msg);
+    this.code = code;
+  }
+}
+
 async function readBody(req: IncomingMessage): Promise<any> {
   const chunks: Buffer[] = [];
   let size = 0;
+  const LIMIT = 4 * 1024 * 1024;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > 4 * 1024 * 1024) throw new Error("请求体过大");
+    if (size > LIMIT) throw new HttpError(413, `请求体超过 ${LIMIT} 字节`);
     chunks.push(c as Buffer);
   }
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!chunks.length) throw new HttpError(400, "请求体为空");
+  const raw = Buffer.concat(chunks).toString("utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new HttpError(400, "请求体不是合法 JSON: " + (e as Error).message.slice(0, 120));
+  }
 }
 
 /** 只允许扩展来的请求。网页无法伪造 Origin。 */
@@ -224,6 +241,15 @@ const server = createServer(async (req, res) => {
       const raw = await readBody(req);
       const chatReq = normalize(raw as ChatRequest);
 
+      // 入参校验：缺了这些字段要么上游有 bug，要么是手工调用
+      if (!chatReq || typeof chatReq !== "object") throw new HttpError(400, "请求体必须是对象");
+      if (!chatReq.problem || typeof chatReq.problem !== "object")
+        throw new HttpError(400, "缺少 problem");
+      if (typeof chatReq.problem.slug !== "string" || !chatReq.problem.slug)
+        throw new HttpError(400, "problem.slug 必须是非空字符串");
+      if (!Array.isArray(chatReq.messages) || chatReq.messages.length === 0)
+        throw new HttpError(400, "messages 必须是非空数组");
+
       // 模型：请求里带了就用（需在白名单内），否则用 .env 默认值
       const requested = typeof (raw as any).model === "string" ? (raw as any).model.trim() : "";
       const allow = allowedModels();
@@ -304,7 +330,9 @@ const server = createServer(async (req, res) => {
 
     json(res, 404, { error: `未知路由 ${req.method} ${path}` });
   } catch (e) {
-    json(res, 500, { error: (e as Error).message });
+    const code = e instanceof HttpError ? e.code : 500;
+    if (code >= 500) console.error("[500]", e);
+    json(res, code, { error: (e as Error).message });
   }
 });
 

@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 // 执行 markdown.js 的副作用：往 globalThis.__BL_MD__ 挂 { esc, md }
 new Function(readFileSync(resolve(HERE, "../src/markdown.js"), "utf8"))();
-const { md, esc } = globalThis.__BL_MD__;
+const { md, esc, stripMemory } = globalThis.__BL_MD__;
 
 let pass = 0,
   fail = 0;
@@ -113,7 +113,18 @@ check(
 );
 check("esc 本身", esc("<>&\"") === "&lt;&gt;&amp;&quot;");
 
-console.log("\n=== 6) 边界 ===");
+console.log("\n=== 6) 剥离 <memory> 段（对话里不该看到它）===");
+const withMem = `问题在第 7 行。\n\n<memory>{"kind":"stuck_point","desc":"比较时机"}</memory>`;
+check("完整段被剥掉", !stripMemory(withMem).includes("<memory>"), stripMemory(withMem));
+check("正文保留", stripMemory(withMem).includes("第 7 行"));
+check("流式途中（未闭合）也剥掉", !stripMemory("正文…\n<memory>{\"kind\"").includes("<memory>"));
+check("中途半个标签也不露", !stripMemory("正文…\n<mem").includes("<mem"));
+check("没有标签时原样", stripMemory("就是一段话").includes("就是一段话"));
+check("多次出现都剥掉", stripMemory("a<memory>{}</memory>b<memory>{}</memory>c").includes("a") &&
+  stripMemory("a<memory>{}</memory>b<memory>{}</memory>c").includes("c"));
+check("null 安全", stripMemory(null) === "");
+
+console.log("\n=== 7) 边界 ===");
 check("空输入", md("") === "");
 check("null", md(null) === "");
 check("纯空白", md("   \n  ").trim() === "");

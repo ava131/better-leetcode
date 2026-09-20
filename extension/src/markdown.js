@@ -197,6 +197,26 @@
     return html;
   }
 
+  /**
+   * 剥掉模型输出末尾的 <memory>…</memory> 段。
+   *
+   * 为什么需要：后端把 SSE 的**原始增量**直接转发下来，那段标签也在里面
+   * （后端只是另外发一个 memory_suggestion 事件）。不剥的话用户会在对话里
+   * 看到 `<memory>{"kind":...}</memory>` 的原始 JSON，而且它会被存进会话、
+   * 下一轮再发给模型。
+   *
+   * 未闭合的也截掉 —— 流式过程中标签是一点点到的，不能让它闪出来。
+   */
+  function stripMemory(s) {
+    let out = String(s ?? "")
+      .replace(/<memory>[\s\S]*?<\/memory>/g, "")
+      .replace(/<memory>[\s\S]*$/, "");
+    // 流式途中标签可能只到了一半（"<mem"），尾巴上那半个也要藏起来。
+    // 因为是拿**完整 buffer** 重算的，下一批字符到了它会自己回来，不会丢字。
+    out = out.replace(/<(?:m(?:e(?:m(?:o(?:r(?:y)?)?)?)?)?)?$/, "");
+    return out.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   // 暴露给同作用域的 content.js（也方便在 Node 里单测）
-  globalThis.__BL_MD__ = { esc, md };
+  globalThis.__BL_MD__ = { esc, md, stripMemory };
 })();

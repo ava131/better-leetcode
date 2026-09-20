@@ -6,6 +6,9 @@
 (function () {
   "use strict";
 
+  // esc / md 来自 markdown.js（content_scripts 的多个 js 共享同一作用域）
+  const { esc, md } = globalThis.__BL_MD__;
+
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
   const VER = "0.4.0";
@@ -54,6 +57,10 @@
     run: null,
     /** 最近一次动作："run" | "submit"，决定状态条优先显示谁 */
     lastAction: null,
+    /** 鼠标移开自动收起（默认关，点标题栏的 ⇥ 开） */
+    autoHide: false,
+    /** 用户拖出来的面板尺寸 */
+    panelSize: null,
     /** 当前选中的模型（空 = 用后端的默认值） */
     model: "",
     /** 后端给出的可选模型列表 */
@@ -96,8 +103,15 @@
 :host { all: initial; }
 * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
 .wrap { position: fixed; top: 60px; right: 12px; width: 380px; max-height: calc(100vh - 90px);
-  display: flex; flex-direction: column; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0,0,0,.14); z-index: 2147483000; overflow: hidden; font-size: 13px; color: #111827; }
+  min-width: 300px; display: flex; flex-direction: column; background: #fff; border: 1px solid #e5e7eb;
+  border-radius: 12px; box-shadow: 0 8px 32px rgba(0,0,0,.14); z-index: 2147483000;
+  overflow: hidden; font-size: 13px; color: #111827; }
+/* 左下角的尺寸把手（面板贴右边，所以往左拖是变宽） */
+.grip { position: absolute; left: 0; bottom: 0; width: 18px; height: 18px;
+  cursor: nesw-resize; touch-action: none; z-index: 2; }
+.grip::after { content: ""; position: absolute; left: 4px; bottom: 4px; width: 7px; height: 7px;
+  border-left: 2px solid #cbd5e1; border-bottom: 2px solid #cbd5e1; border-radius: 0 0 0 3px; opacity: .8; }
+.grip:hover::after { border-color: #2563eb; opacity: 1; }
 @media (prefers-color-scheme: dark) {
   .wrap { background: #1f2937; border-color: #374151; color: #f3f4f6; }
   .hd { background: #111827; border-color: #374151; }
@@ -139,6 +153,7 @@
 .hd button { border: none; background: transparent; cursor: pointer; color: #6b7280; font-size: 15px;
   padding: 2px 6px; border-radius: 4px; line-height: 1; }
 .hd button:hover { background: #e5e7eb; }
+.hd button.on { background: #dbeafe; color: #1d4ed8; }
 
 /* 状态条 —— 回答「上下文已就绪」这个需求 */
 .status { padding: 7px 12px; font-size: 12px; border-bottom: 1px solid #e5e7eb; flex: 0 0 auto;
@@ -165,10 +180,39 @@
 .msg.assistant { background: #f9fafb; align-self: stretch; }
 .msg.system { align-self: stretch; text-align: center; color: #9ca3af; font-size: 11px;
   font-family: ui-monospace, monospace; padding: 2px; }
+.msg.assistant p { margin: 0 0 7px; }
+.msg.assistant p:last-child { margin-bottom: 0; }
+.msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 {
+  margin: 11px 0 5px; font-size: 13px; font-weight: 700; line-height: 1.35; }
+.msg.assistant h1 { font-size: 15px; } .msg.assistant h2 { font-size: 14px; }
+.msg.assistant ul, .msg.assistant ol { margin: 5px 0 8px; padding-left: 20px; }
+.msg.assistant li { margin: 2px 0; }
+.msg.assistant ul li { list-style: disc; } .msg.assistant ol li { list-style: decimal; }
+.msg.assistant blockquote { margin: 6px 0; padding: 2px 0 2px 9px; border-left: 3px solid #c7d2fe;
+  color: #6b7280; }
+.msg.assistant blockquote p { margin: 0; }
+.msg.assistant hr { border: none; border-top: 1px solid #e5e7eb; margin: 9px 0; }
+.msg.assistant a { color: #2563eb; text-decoration: underline; }
+.msg.assistant del { opacity: .6; }
+.msg.assistant strong { font-weight: 700; }
 .msg.assistant code { background: #eef2ff; padding: 1px 4px; border-radius: 3px;
-  font-family: ui-monospace, monospace; font-size: 12px; }
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .msg.assistant pre { background: #0f172a; color: #e2e8f0; padding: 8px 10px; border-radius: 6px;
-  overflow-x: auto; margin: 6px 0; font-family: ui-monospace, monospace; font-size: 12px; }
+  overflow-x: auto; margin: 6px 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; line-height: 1.5; position: relative; }
+.msg.assistant pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.msg.assistant pre[data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang); position: absolute; top: 4px; right: 8px;
+  font-size: 10px; color: #64748b; text-transform: lowercase; }
+.msg.assistant table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
+.msg.assistant th, .msg.assistant td { border: 1px solid #e5e7eb; padding: 3px 6px; text-align: left; }
+.msg.assistant th { background: #f3f4f6; font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  .msg.assistant code { background: #111827; color: #c7d2fe; }
+  .msg.assistant th, .msg.assistant td { border-color: #4b5563; }
+  .msg.assistant th { background: #111827; }
+  .msg.assistant hr { border-top-color: #4b5563; }
+}
 .msg.err { background: #fef2f2; color: #b91c1c; align-self: stretch; }
 
 /* 推理模型的思考指示 —— 没有它用户要盯空白面板几十秒 */
@@ -202,7 +246,7 @@
 .send:disabled { background: #9ca3af; cursor: default; }
 `;
 
-  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl;
+  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl;
 
   function build() {
     host = document.createElement("div");
@@ -219,6 +263,7 @@
       <div class="hd">
         <span class="ttl">AI 陪练 <span class="ver">v${VER}</span></span>
         <select class="model" title="切换模型"></select>
+        <button data-act="pin" title="自动隐藏：鼠标移开就收起">⇥</button>
         <button data-act="clear" title="清空对话">⟲</button>
         <button data-act="collapse" title="收起">—</button>
       </div>
@@ -228,7 +273,8 @@
       <div class="ft">
         <textarea class="input" rows="1" placeholder="问点什么…  (⌘/Ctrl + I)"></textarea>
         <button class="send">发送</button>
-      </div>`;
+      </div>
+      <div class="grip" title="拖动调整大小"></div>`;
     root.appendChild(wrap);
 
     ball = document.createElement("button");
@@ -246,6 +292,95 @@
     inputEl = root.querySelector(".input");
     sendEl = root.querySelector(".send");
     modelEl = root.querySelector(".model");
+
+    pinEl = root.querySelector('[data-act="pin"]');
+    const gripEl = root.querySelector(".grip");
+
+    // ── 面板尺寸：拖左下角。面板贴右边，所以往左拖 = 变宽 ──
+    gripEl.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const r = wrap.getBoundingClientRect();
+      const start = { x: e.clientX, y: e.clientY, w: r.width, h: r.height };
+      try {
+        gripEl.setPointerCapture(e.pointerId);
+      } catch {}
+      // 拖动过程中就防抖保存 —— 别只依赖 pointerup（它有可能丢，
+      // 例如指针离开窗口、或者被别的元素抢走）。真实浏览器里 pointerup
+      // 基本都会来，但"基本"不是"一定"。
+      let saveTimer = null;
+      const saveSize = () => {
+        const r2 = wrap.getBoundingClientRect();
+        S.panelSize = { w: Math.round(r2.width), h: Math.round(r2.height) };
+        try {
+          chrome.storage?.local.set({ blPanelSize: S.panelSize });
+        } catch {}
+      };
+      const move = (ev) => {
+        const w = Math.min(Math.max(300, start.w - (ev.clientX - start.x)), window.innerWidth - 40);
+        const h = Math.min(Math.max(320, start.h + (ev.clientY - start.y)), window.innerHeight - 40);
+        wrap.style.width = w + "px";
+        wrap.style.height = h + "px";
+        wrap.style.maxHeight = "none";
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveSize, 250);
+      };
+      const up = () => {
+        if (saveTimer) clearTimeout(saveTimer);
+        gripEl.removeEventListener("pointermove", move);
+        gripEl.removeEventListener("pointerup", up);
+        gripEl.removeEventListener("pointercancel", up);
+        window.removeEventListener("mouseup", up);
+        window.removeEventListener("blur", up);
+        saveSize();
+      };
+      gripEl.addEventListener("pointermove", move);
+      gripEl.addEventListener("pointerup", up);
+      gripEl.addEventListener("pointercancel", up);
+      // 兜底：指针跑出窗口/被抢走时也要收尾
+      window.addEventListener("mouseup", up);
+      window.addEventListener("blur", up);
+    });
+
+    // ── 自动隐藏：鼠标移开一会就收起 ──
+    let hideTimer = null;
+    const cancelHide = () => {
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    };
+    const scheduleHide = () => {
+      if (!S.autoHide || S.collapsed) return;
+      cancelHide();
+      hideTimer = setTimeout(() => {
+        hideTimer = null;
+        // 这些情况下不收：正在流式输出、正在打字、有待确认的记忆卡片
+        if (S.streaming || S.collapsed) return;
+        if (inputEl.value.trim()) return;
+        if (bodyEl.querySelector(".card")) return;
+        setCollapsed(true);
+      }, 900);
+    };
+    wrap.addEventListener("mouseenter", cancelHide);
+    wrap.addEventListener("mouseleave", scheduleHide);
+    inputEl.addEventListener("focus", cancelHide);
+    inputEl.addEventListener("blur", scheduleHide);
+    ball.addEventListener("mouseenter", cancelHide);
+
+    pinEl.addEventListener("click", () => {
+      S.autoHide = !S.autoHide;
+      applyPinUI();
+      try {
+        chrome.storage?.local.set({ blAutoHide: S.autoHide });
+      } catch {}
+      if (S.autoHide) {
+        say("system", "自动隐藏已开 —— 鼠标移开约 1 秒后收起");
+        scheduleHide();
+      } else {
+        say("system", "自动隐藏已关");
+      }
+    });
 
     modelEl.addEventListener("change", () => {
       S.model = modelEl.value;
@@ -316,6 +451,22 @@
       },
       true
     );
+  }
+
+  function applyPinUI() {
+    if (!pinEl) return;
+    pinEl.classList.toggle("on", !!S.autoHide);
+    pinEl.title = S.autoHide ? "自动隐藏：已开（点一下关掉）" : "自动隐藏：已关（点一下开启）";
+    pinEl.textContent = S.autoHide ? "⇤" : "⇥";
+  }
+
+  function applyPanelSize(size) {
+    if (!size || !Number.isFinite(size.w) || !Number.isFinite(size.h)) return;
+    const w = Math.min(Math.max(300, size.w), window.innerWidth - 40);
+    const h = Math.min(Math.max(320, size.h), window.innerHeight - 40);
+    wrap.style.width = w + "px";
+    wrap.style.height = h + "px";
+    wrap.style.maxHeight = "none";
   }
 
   function setCollapsed(v) {
@@ -440,23 +591,6 @@
     s = String(s).replace(/\n/g, "⏎");
     return s.length > n ? s.slice(0, n) + "…" : s;
   }
-  function esc(s) {
-    return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  }
-
-  /** 极简 markdown：代码块 + 行内代码 + 粗体。够用且不会 XSS。 */
-  function md(s) {
-    const parts = String(s ?? "").split(/```/);
-    return parts
-      .map((seg, i) => {
-        if (i % 2 === 1) return `<pre>${esc(seg.replace(/^\w*\n/, ""))}</pre>`;
-        return esc(seg)
-          .replace(/`([^`]+)`/g, "<code>$1</code>")
-          .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-      })
-      .join("");
-  }
-
   function renderMessages() {
     bodyEl.innerHTML = "";
     for (const m of S.messages) {
@@ -946,9 +1080,18 @@
   async function boot() {
     build();
     try {
-      const st = await chrome.storage.local.get(["blCollapsed", "blModel", "blBallPos"]);
+      const st = await chrome.storage.local.get([
+        "blCollapsed",
+        "blModel",
+        "blBallPos",
+        "blAutoHide",
+        "blPanelSize",
+      ]);
       setCollapsed(!!st.blCollapsed);
       if (st.blModel) S.model = st.blModel;
+      S.autoHide = !!st.blAutoHide;
+      applyPinUI();
+      applyPanelSize(st.blPanelSize);
       applyBallPos(st.blBallPos);
     } catch {}
 

@@ -592,7 +592,11 @@ LLM 回复里带 <memory>{...}</memory>
 | **★21** | `chrome.storage.session` **默认不对 content script 开放** | background 启动时调 `chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })`。不调的话 content script 里所有 `storage.session` 调用静默失败 |
 | **★23** | **`/check/` 的 id 不一定是数字**。提交的 id 是数字，但**运行的 id 是字符串 `runcode_1789870796.78681_5MYyJ32krX`**。正则写成 `(\d+)` 会把运行结果整个漏掉 | 用 `([^/]+)`，再用 `/^runcode_/` 区分是运行还是提交 |
 | **★24** | 运行和提交**共用** `GET /submissions/detail/{id}/check/` 这一个端点 | 靠 id 前缀分流：`runcode_` = 运行，纯数字 = 提交。两条链路的结果形状完全不同（运行有逐用例数组，提交只有 lastTestcase） |
-| **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED） |
+| **★25** | 自带 markdown 渲染器只处理了代码块/行内码/粗体，**列表、标题、引用、表格全都没渲染**，用户看到的是 `- xxx`、`### xxx` 原文 | 补全渲染器并抽成 `extension/src/markdown.js`（content_scripts 多文件共享作用域，所以能拆），配 40 项单测 |
+| **★26** | **代码块是在转义之前被摘出来的，所以它的内容从未被转义** —— 忘了补 esc 就是一个 XSS 洞（模型输出含 `<script>` 的代码块可直接注入） | 还原代码块时必须再 esc 一次。单测「代码块里的标签也转义」就是守这条 |
+| **★27** | 依赖 `pointerup` 保存状态不可靠（指针出窗口/被抢走就丢） | 拖动过程中就**防抖保存**，并挂 `pointerup` / `pointercancel` / window `mouseup` / `blur` 多重收尾 |
+| **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
+
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |
 | 8 | 提交历史路径带 `/api/` 前缀 | `GET /api/submissions/`，与 GraphQL 路径不同 |
 | 9 | 扩展 service worker 里发跨站请求会丢 SameSite cookie | **不要**在 SW 里调 leetcode.cn；只在 SW 里调自己的 localhost |

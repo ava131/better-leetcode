@@ -152,10 +152,18 @@ export const READ_SIDEBAR = `(() => {
 
 /** 给隔离 world 用的最小 chrome.* stub（模拟扩展环境） */
 export const CHROME_STUB = `
-window.__sess = {}; window.__diag = [];
+window.__sess = {}; window.__local = {}; window.__diag = [];
 window.chrome = {
   storage: {
-    local: { get: async () => ({}), set: async () => {} },
+    // 真的存起来，方便断言"偏好有没有持久化"
+    local: {
+      get: async (keys) => {
+        const o = {};
+        (keys || []).forEach((k) => { if (window.__local[k] !== undefined) o[k] = window.__local[k]; });
+        return o;
+      },
+      set: async (o) => { Object.assign(window.__local, o); },
+    },
     session: {
       get: async (keys) => { const o = {}; keys.forEach(k => { if (window.__sess[k]) o[k] = window.__sess[k]; }); return o; },
       set: async (o) => { Object.assign(window.__sess, o); },

@@ -294,7 +294,8 @@
 
   function onCheckResponse(url, json) {
     try {
-      const m = String(url).match(/\/submissions\/detail\/(\d+)\/check/);
+      // id 可能是数字（提交）或 "runcode_..."（运行）—— 只匹配 \d+ 会漏掉运行
+      const m = String(url).match(/\/submissions\/detail\/([^/]+)\/check/);
       if (!m || !json) return;
       const done =
         json.state === "SUCCESS" ||
@@ -332,6 +333,87 @@
     return last;
   }
 
+  // ───────────────────────── 运行（interpret_solution） ─────────────────────────
+  //
+  // 和提交是两条完全不同的链路：
+  //   POST /problems/{slug}/interpret_solution/  { lang, question_id, typed_code, data_input }
+  //     → { interpret_id: "runcode_...", test_case, interpret_expected_id }
+  //   GET  /submissions/detail/runcode_.../check/  → 逐用例的答案对比
+  //
+  // 运行**不产生提交记录**，只跑题目自带的示例用例。用户日常最常用的就是这个。
+
+  /** 上一次运行请求里的 data_input（全部用例的输入，按顺序拼接） */
+  let lastRunInput = "";
+  let lastRunLang = "";
+
+  function onInterpretRequest(body) {
+    try {
+      const j = typeof body === "string" ? JSON.parse(body) : body;
+      if (!j) return;
+      lastRunInput = j.data_input || "";
+      lastRunLang = j.lang || "";
+    } catch {}
+  }
+
+  /** 把运行结果整理成后端契约的形状 */
+  function extractRun(json) {
+    if (!json) return null;
+    const passed = json.total_correct ?? 0;
+    const total = json.total_testcases ?? 0;
+    const cmp = String(json.compare_result ?? "");
+    // compare_result 是逐用例的成败位图（"101" = 第 2 个失败）
+    const failAt = cmp.indexOf("0");
+    return {
+      verdict: json.status_msg || null,
+      passed,
+      total,
+      failedIndex: failAt >= 0 ? failAt + 1 : null,
+      compareResult: cmp,
+      dataInput: lastRunInput,
+      lang: json.pretty_lang || json.lang || lastRunLang || null,
+      answers: json.code_answer || [],
+      expected: json.expected_code_answer || [],
+      stdout: json.stdout_list || json.std_output_list || [],
+      runtime: json.status_runtime || null,
+      memory: json.status_memory || null,
+      runtimeError: json.full_runtime_error || json.runtime_error || null,
+      compileError: json.full_compile_error || json.compile_error || null,
+      codeOutput: json.code_output || [],
+    };
+  }
+
+  /** 页面自己的 /check/ 轮询会带回运行结果 —— 被动接住，零额外请求 */
+  function onRunCheckResponse(url, json) {
+    if (!json || json.state !== "SUCCESS") return;
+    const m = String(url).match(/\/submissions\/detail\/([^/]+)\/check/);
+    if (!m || !/^runcode_/.test(m[1])) return;
+    const r = extractRun(json);
+    if (r) post("run", r);
+  }
+
+  /** 兜底：页面没轮询到（例如它切走了），我们自己查一次 */
+  async function pollRun(interpretId, timeoutMs = 20000) {
+    const t0 = Date.now();
+    let delay = 500;
+    while (Date.now() - t0 < timeoutMs) {
+      try {
+        const res = await window.__bl_origFetch(`/submissions/detail/${interpretId}/check/`, {
+          credentials: "include",
+        });
+        const j = await res.json();
+        if (j && j.state === "SUCCESS") {
+          const r = extractRun(j);
+          if (r) {
+            post("run", r);
+            return;
+          }
+        }
+      } catch {}
+      await sleep(delay);
+      delay = Math.min(Math.round(delay * 1.5), 2000);
+    }
+  }
+
   // ───────────────────────── 包装 fetch ─────────────────────────
 
   const origFetch = window.fetch;
@@ -354,16 +436,28 @@
   if (typeof origFetch === "function") {
     window.fetch = function (input, init) {
       const url = typeof input === "string" ? input : input && input.url ? input.url : "";
+      if (/\/interpret_solution\/?/.test(String(url))) onInterpretRequest(init && init.body);
       const p = origFetch.apply(this, arguments);
       try {
         p.then((res) => {
           try {
             const ct = res.headers.get("content-type") || "";
             if (!ct.includes("json")) return;
-            if (/\/submit\/?/.test(url)) {
+            if (/\/interpret_solution\/?/.test(url)) {
+              res.clone().json().then((j) => {
+                const id = j && (j.interpret_id || j.interpretId);
+                if (id) {
+                  post("running", { interpretId: id });
+                  pollRun(id);
+                }
+              }).catch(() => {});
+            } else if (/\/submit\/?/.test(url)) {
               res.clone().json().then(onSubmitResponse).catch(() => {});
             } else if (/\/check\/?/.test(url)) {
-              res.clone().json().then((j) => onCheckResponse(url, j)).catch(() => {});
+              res.clone().json().then((j) => {
+                onCheckResponse(url, j);      // 提交的轮询信号
+                onRunCheckResponse(url, j);   // 运行的结果（被动接住）
+              }).catch(() => {});
             }
           } catch {}
         }).catch(() => {});
@@ -389,20 +483,32 @@
       return origOpen.apply(this, arguments);
     };
 
-    OrigXHR.prototype.send = function () {
+    OrigXHR.prototype.send = function (body) {
       try {
+        const u = this.__bl_url || "";
+        if (/\/interpret_solution\/?/.test(u)) onInterpretRequest(body);
         this.addEventListener("load", () => {
           try {
             const url = this.__bl_url || "";
+            const isRun = /\/interpret_solution\/?/.test(url);
             const isSubmit = /\/submit\/?/.test(url);
             const isCheck = /\/check\/?/.test(url);
-            if (!isSubmit && !isCheck) return;
+            if (!isRun && !isSubmit && !isCheck) return;
             let j = null;
             try {
               j = this.responseType === "json" ? this.response : JSON.parse(this.responseText);
             } catch {}
-            if (isSubmit) onSubmitResponse(j);
-            else onCheckResponse(url, j);
+            if (isRun) {
+              const id = j && (j.interpret_id || j.interpretId);
+              if (id) {
+                post("running", { interpretId: id });
+                pollRun(id);
+              }
+            } else if (isSubmit) onSubmitResponse(j);
+            else {
+              onCheckResponse(url, j);
+              onRunCheckResponse(url, j);
+            }
           } catch {}
         });
       } catch {}

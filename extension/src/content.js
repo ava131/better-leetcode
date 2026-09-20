@@ -8,7 +8,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.3.0";
+  const VER = "0.4.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -48,6 +48,12 @@
     /** 已提交、判题中（异步判题需要这个中间态） */
     judging: false,
     judgeFailed: false,
+    /** 运行中（点「运行」跑示例用例） */
+    running: false,
+    /** 最近一次运行的结果 —— 和提交是两条独立链路 */
+    run: null,
+    /** 最近一次动作："run" | "submit"，决定状态条优先显示谁 */
+    lastAction: null,
     /** 当前选中的模型（空 = 用后端的默认值） */
     model: "",
     /** 后端给出的可选模型列表 */
@@ -56,6 +62,7 @@
 
   const SUGGESTIONS_NEW = ["这题有几种解法？", "思路是什么？", "帮我分析下这题的坑"];
   const SUGGESTIONS_JUDGED = ["这版哪里错了", "为什么这里会错", "找个用例一步步走", "这题有几种解法？"];
+  const SUGGESTIONS_RUN = ["这个用例为什么不过", "帮我找个用例一步步走", "运行过了为什么提交会挂", "这题有几种解法？"];
 
   /** 从 URL 里取题号。力扣是 /problems/{slug}/... ，tab 会跟在后面 */
   function slugFromPath() {
@@ -357,10 +364,12 @@
         <div class="line2">先启动 server（node src/index.ts），然后刷新本页</div>`;
       return;
     }
-    if (S.judging) {
+    if (S.judging || S.running) {
       statusEl.className = "status blue";
       const t = S.problem ? S.problem.title : "";
-      statusEl.innerHTML = `<div class="line1"><span class="dot"></span>判题中…</div>
+      statusEl.innerHTML = `<div class="line1"><span class="dot"></span>${
+        S.judging ? "判题中…" : "运行中…"
+      }</div>
         <div class="line2">${esc(t)} · 拿到结果后自动就绪</div>`;
       return;
     }
@@ -370,6 +379,21 @@
         <div class="line2">可以手动告诉我结果，或再提交一次</div>`;
       return;
     }
+    // 最近一次是「运行」→ 优先显示运行结果（用户日常最常用这个）
+    if (S.lastAction === "run" && S.run) {
+      const r = S.run;
+      const ok = !r.failedIndex && /accepted/i.test(r.verdict ?? "");
+      statusEl.className = "status " + (ok ? "green" : "yellow");
+      const bits = [S.problem ? S.problem.title : "", `运行 ${r.verdict ?? "?"}`, `${r.passed}/${r.total}`];
+      const detail = r.failedIndex
+        ? `第 ${r.failedIndex} 个用例：你的输出 ${esc(trim(r.answers?.[r.failedIndex - 1], 20))} / 期望 ${esc(trim(r.expected?.[r.failedIndex - 1], 20))}`
+        : "示例用例全过（但示例全过 ≠ 提交能过）";
+      statusEl.innerHTML = `<div class="line1"><span class="dot"></span>运行结果已就绪</div>
+        <div class="line2">${esc(bits.filter(Boolean).join(" · "))}</div>
+        <div class="line2">${detail}</div>`;
+      return;
+    }
+
     if (S.verdict) {
       statusEl.className = "status green";
       const pass = S.passed != null && S.total != null ? ` · ${S.passed}/${S.total}` : "";
@@ -506,7 +530,12 @@
   }
 
   function renderChips() {
-    const list = S.verdict ? SUGGESTIONS_JUDGED : SUGGESTIONS_NEW;
+    const list =
+      S.lastAction === "run" && S.run
+        ? SUGGESTIONS_RUN
+        : S.verdict
+        ? SUGGESTIONS_JUDGED
+        : SUGGESTIONS_NEW;
     chipsEl.innerHTML = "";
     if (!S.backendOk) return;
     for (const t of list) {
@@ -623,6 +652,7 @@
       model: S.model || undefined,
       verdict: S.verdict,
       testcase: S.testcase,
+      run: S.run,
       passed: S.passed,
       total: S.total,
       runtimeError: S.runtimeError,
@@ -710,9 +740,21 @@
         S.submissionId = d.payload.submissionId;
         break;
       }
+      case "running": {
+        S.running = true;
+        S.lastAction = "run";
+        updateAll();
+        break;
+      }
+      case "run": {
+        applyRun(d.payload);
+        break;
+      }
       case "judging": {
         // 判题是异步的，先亮中间态，别让界面看起来是死的
         S.judging = true;
+        S.running = false;
+        S.lastAction = "submit";
         S.judgeFailed = false;
         S.submissionId = d.payload.submissionId;
         updateAll();
@@ -810,6 +852,8 @@
           lang: S.lang,
           verdict: S.verdict,
           testcase: S.testcase,
+          run: S.run,
+          lastAction: S.lastAction,
           passed: S.passed,
           total: S.total,
           runtimeError: S.runtimeError,
@@ -839,6 +883,8 @@
       S.lang = s.lang || S.lang;
       S.verdict = s.verdict ?? null;
       S.testcase = s.testcase ?? null;
+      S.run = s.run ?? null;
+      S.lastAction = s.lastAction ?? null;
       S.passed = s.passed ?? null;
       S.total = s.total ?? null;
       S.runtimeError = s.runtimeError ?? null;
@@ -851,6 +897,23 @@
     }
   }
 
+  /** 处理运行结果。和提交分开存 —— 运行不产生提交记录。 */
+  function applyRun(r) {
+    if (!r) return;
+    S.running = false;
+    S.run = r;
+    S.lastAction = "run";
+    updateAll();
+    saveSession();
+    diag("applied-run", {
+      verdict: r.verdict,
+      passed: r.passed,
+      total: r.total,
+      failedIndex: r.failedIndex,
+    });
+    // 运行不通知后端记提交 —— 它不是提交
+  }
+
   function resetSession(newSlug) {
     diag("reset-session", { from: S.slug, to: newSlug ?? null, hadMsgs: S.messages.length });
     S.verdict = null;
@@ -860,6 +923,9 @@
     S.runtimeError = null;
     S.judging = false;
     S.judgeFailed = false;
+    S.running = false;
+    S.run = null;
+    S.lastAction = null;
     S.codeHistory = [];
     S.messages = [];
     S._sid = null;

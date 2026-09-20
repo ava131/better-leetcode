@@ -76,6 +76,47 @@ export function buildContextBlock(req: ChatRequest, memory?: Memory | null): str
     parts.push(`<judge>（尚未提交，没有判题结果）</judge>`);
   }
 
+  // ---- 运行结果（题目自带示例用例） ----
+  if (req.run) {
+    const r = req.run;
+    const attrs = [`verdict="${xmlEscape(r.verdict ?? "未知")}"`, `passed="${r.passed}"`, `total="${r.total}"`];
+    if (r.failedIndex) attrs.push(`failed_case="${r.failedIndex}"`);
+
+    const inner: string[] = [
+      `<note>用户点的是「运行」，不是「提交」—— 只跑了题目**自带的示例用例**。`,
+      `⚠️ **运行通过不代表提交能通过**：示例用例通常很宽松，覆盖不到边界。</note>`,
+    ];
+
+    const cmp = r.compareResult ?? "";
+    const cases: string[] = [];
+    for (let i = 0; i < r.total; i++) {
+      const ok = cmp[i] !== "0";
+      const mine = r.answers?.[i] ?? "";
+      const want = r.expected?.[i] ?? "";
+      cases.push(
+        `    <case n="${i + 1}" ok="${ok}"><your_output>${xmlEscape(truncate(mine, 300))}</your_output>` +
+          `<expected>${xmlEscape(truncate(want, 300))}</expected></case>`
+      );
+    }
+    if (cases.length) {
+      inner.push(`  <testcases compare="${xmlEscape(cmp)}">`, ...cases, `  </testcases>`);
+    }
+
+    if (r.dataInput) {
+      inner.push(
+        `  <data_input>`,
+        `    <note>全部用例的输入按顺序拼接。力扣不返回切分点，所以哪几行属于第几个用例要自己判断。</note>`,
+        xmlEscape(truncate(r.dataInput, 1200)),
+        `  </data_input>`
+      );
+    }
+    if (r.runtimeError) inner.push(`  <runtime_error>${xmlEscape(truncate(r.runtimeError, 1200))}</runtime_error>`);
+    if (r.compileError) inner.push(`  <compile_error>${xmlEscape(truncate(r.compileError, 1200))}</compile_error>`);
+    if (r.runtime) inner.push(`  <perf runtime="${xmlEscape(r.runtime)}" memory="${xmlEscape(r.memory ?? "")}" />`);
+
+    parts.push([`<run ${attrs.join(" ")}>`, ...inner, `</run>`].join("\n"));
+  }
+
   // ---- 会话内的历史代码（不落库，只在同题多次提交时存在） ----
   const hist = (req.codeHistory ?? []).filter((h) => h.code !== req.code);
   if (hist.length) {

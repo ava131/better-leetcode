@@ -155,6 +155,7 @@
 | 题干 | 被动捕获 `questionDetail` 的 GraphQL 响应 | ❌ **错**。力扣题目页**根本不发**这个请求 —— 题面是**服务端渲染**进 `__NEXT_DATA__` 与 DOM 的 | **0**（直接读） |
 | submission_id | 被动捕获 submit 响应 | ✅ 对。但**走 XHR 不是 fetch**，两个都要包装 | **0** |
 | 提交详情（含失败用例） | 主动发 1 次 GraphQL | ✅ 对 | **1** |
+| **运行结果**（示例用例） | 独立链路：`interpret_solution` → 轮询 `/check/` | ✅ 已实现。**逐用例的答案对比是白送的**（见 §3.3） | **0**（被动接住页面的轮询） |
 
 所以整个产品每次提交只增加 **1 个额外请求**。对 `.cn` 的限流（约 60 次/10 分钟）毫无压力。
 
@@ -589,6 +590,8 @@ LLM 回复里带 <memory>{...}</memory>
 | **★19** | 页面可能整页重载（content script 重跑，内存状态全丢） | 用 `chrome.storage.session`（**纯内存，不落盘**）暂存会话，刷新后恢复。既挺过刷新，又不违反 PRD 的"不持久化对话" |
 | **★20**<br>**最严重** | **MAIN world 与 ISOLATED world 的 JS 全局作用域完全隔离。** 拦截器（MAIN）设的 `window.__BL_NONCE__`，content script（ISOLATED）读到的**是 `undefined`** → nonce 校验 `d.nonce !== NONCE` 恒为真 → **所有消息全被丢掉，插件完全没反应**（表现为"提交后什么都没变化""题干未取到"） | **DOM 是唯一共享的**。用 `document.documentElement.setAttribute('data-bl-nonce', ...)` 传递。另外补一个显式握手：content script 发 `hello`（唯一免校验的消息），拦截器回带 nonce 的 `ready`。因为拦截器在 `document_start` 发的 `ready`，`document_idle` 的 content script 根本听不到 |
 | **★21** | `chrome.storage.session` **默认不对 content script 开放** | background 启动时调 `chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })`。不调的话 content script 里所有 `storage.session` 调用静默失败 |
+| **★23** | **`/check/` 的 id 不一定是数字**。提交的 id 是数字，但**运行的 id 是字符串 `runcode_1789870796.78681_5MYyJ32krX`**。正则写成 `(\d+)` 会把运行结果整个漏掉 | 用 `([^/]+)`，再用 `/^runcode_/` 区分是运行还是提交 |
+| **★24** | 运行和提交**共用** `GET /submissions/detail/{id}/check/` 这一个端点 | 靠 id 前缀分流：`runcode_` = 运行，纯数字 = 提交。两条链路的结果形状完全不同（运行有逐用例数组，提交只有 lastTestcase） |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED） |
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |
 | 8 | 提交历史路径带 `/api/` 前缀 | `GET /api/submissions/`，与 GraphQL 路径不同 |

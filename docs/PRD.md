@@ -697,6 +697,7 @@ R0 用真实登录态实测完成，详见 `docs/R0-captured-api.md`。结果：
 
 ## 附录 B · 相关文档
 
+- **`docs/HANDOFF.md`** —— **交接文档：逐文件说明、当前 bug 排查进度、下一步计划**
 - `docs/TECH-DESIGN.md` —— 技术设计（架构、接口、schema、prompt 结构、坑）
 - `docs/R0-captured-api.md` —— **实测接口原始证据**（力扣 `.cn` 真实抓包）
 - `research/ai-leetcode-tools.md` —— 现有产品格局、用户量、评价、官方动作

@@ -1,0 +1,306 @@
+# 交接文档（给下一个窗口）
+
+> 写于 v0.7.0（commit `6c023bd`）。目标：**别的会话读完这份就能接着改，不用重新摸索。**
+>
+> 顺序建议：先读「§1 这是什么」，再读「§6 当前这个 bug」（那是第一优先级），
+> 需要改代码时看「§2 文件清单」和「§9 踩过的坑」。
+
+---
+
+## 1. 这是什么
+
+一个挂在 **力扣（leetcode.cn）** 上的 Chrome 扩展 + 本地后端。用户刷题时，
+把**题干 + 自己的代码 + 判题/运行结果**自动送进一个侧边栏对话，可以追问、
+可以让它挑最小用例一步步走。对话**全量存本地 SQLite**，可按题翻回历史。
+
+**用户就是唯一使用者也是唯一决策者**，所以：
+- 不追用户量、不追功能完整度，只追「他自己每天真的会用」
+- 唯一验收标准：**下次卡在 `cur.next` 上，第一反应是打开它，而不是去点题解**
+
+**不是**什么：不做判题器、不做题库、不自动改代码。
+
+---
+
+## 2. 文件清单（每个文件干什么）
+
+### 根目录
+
+| 文件 | 作用 |
+|---|---|
+| `README.md` | 面向使用者的上手说明（三步：起后端 / 加载扩展 / 用） |
+| `start.command` | 双击启动后端的 macOS 脚本。有端口占用检查 |
+| `.gitignore` | 忽略 `.env` / `*.db` / `bl-server.log` |
+
+### `docs/` —— **先读这里**
+
+| 文件 | 作用 |
+|---|---|
+| `docs/HANDOFF.md` | 本文件 |
+| `docs/PRD.md` | 需求与交互设计。**FR-1~FR-7**。FR-5 是存储取舍（v0.7 刚反转过），FR-7 是 P2 的分层导师 |
+| `docs/TECH-DESIGN.md` | 技术设计 + **§7 是一份 41 条「踩过的坑」清单**。改代码前扫一眼省很多事 |
+| `docs/R0-captured-api.md` | 力扣 `.cn` 的**真实抓包证据**（接口形状的唯一权威来源） |
+
+### `server/` —— 本地后端（Node 24，**零依赖零构建**）
+
+Node 24 自带 `node:sqlite` 和 TS 直跑，所以：**没有 package.json 依赖，没有构建步骤**。
+改完直接 `node src/index.ts`。
+
+| 文件 | 作用 |
+|---|---|
+| `src/index.ts` | HTTP 服务（只绑 127.0.0.1）。路由：`/chat`(SSE)、`/history/*`、`/health`、`/diag`、`/models`、`/debug/last-prompt`。**日志同时写 stdout 和 `bl-server.log`** |
+| `src/history.ts` | **对话存储层**（新，v0.7）。schema、落库、会话列表、LIKE 检索、快照去重 |
+| `src/context.ts` | **上下文组装**：把扩展传来的快照拼成给模型的 `<context>` 块（`<problem>` `<code>` `<judge>` `<run>`） |
+| `src/prompts/system.md` | **system prompt**。整个产品的价值主要在这里，最该改的文件 |
+| `src/llm.ts` | LLM provider（OpenAI 兼容）+ SSE 流解析。`reasoning_content` 走 `thinking` 事件 |
+| `src/html.ts` | 力扣题干 HTML → markdown（自实现，零依赖） |
+| `src/types.ts` | 扩展↔后端的数据契约类型 |
+| `src/cli.ts` | 命令行：`--dry-run` 打印拼好的 prompt（**不用 API key**），不带参数则真调用 |
+| `test/history.ts` | 对话存储层单测（31 项） |
+| `test/smoke.ts` | HTML→markdown + `<memory>` 防御性剥离（8 项） |
+| `fixtures/*.json` | 真实数据的测试夹具（`linked-list-cycle` / `step-through` / `run-example`） |
+| `.env` | **API key 在这里，已 gitignore**。`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_MODELS` |
+
+### `extension/` —— Chrome MV3
+
+| 文件 | 作用 |
+|---|---|
+| `manifest.json` | MV3。**两个 content_scripts**：拦截器进 MAIN world，扩展代码进 ISOLATED |
+| `src/interceptor.js` | **MAIN world 拦截器**。读题干/代码、抓提交与运行、轮询判题结果 |
+| `src/content.js` | **ISOLATED：整个侧边栏 UI**（1700 行，最大的文件）。状态机、渲染、历史视图、拖动吸附、超时与停止 |
+| `src/markdown.js` | markdown 渲染 + `stripMemory()`。**单独成文件是为了能在 Node 里单测**（content_scripts 多文件共享作用域） |
+| `src/background.js` | service worker。**唯一能发跨域请求的地方**（只跟 localhost 说话）+ SSE→port 转发 |
+| `assets/pet.jpg` | 小球形象图 |
+| `icons/*.png` | 扩展图标 16/32/48/128 |
+
+### `tools/probe/` —— 对着**真实页面**验证的 CDP 脚本
+
+| 文件 | 作用 |
+|---|---|
+| `README.md` | 用法 + 起调试版 Chrome 的完整命令 |
+| `cdp.mjs` | 极简 CDP 客户端（零依赖）。含 `open()` / `evalInWorld()`（**按主 frame 过滤**） |
+| `capture-api.mjs` | 抓力扣页面自己发的 GraphQL（力扣改 schema 时用它重新确认字段） |
+| `e2e.mjs` | 端到端回归：保真 world 结构 + 真实点提交按钮 |
+| `ui-wiring.mjs` | 界面接线回归：发送按钮 / 回车 / 停止 / 拉大后仍可用 |
+
+---
+
+## 3. 怎么跑
+
+```bash
+# 起后端（或双击根目录 start.command）
+cd server && node src/index.ts
+
+# 不花钱看 prompt —— 最该先做的事
+cd server && node src/cli.ts --dry-run fixtures/linked-list-cycle.json
+
+# 真问一次
+cd server && node src/cli.ts fixtures/linked-list-cycle.json
+
+# 全部测试
+node extension/test/wiring.test.mjs
+node extension/test/markdown.test.mjs
+node extension/test/background.test.mjs
+cd server && MEMORY_DB=./.dev-memory.db node test/smoke.ts
+cd server && MEMORY_DB=./.dev-memory.db node test/history.ts
+```
+
+**当前测试状态（全绿）**：history 31 / smoke 8 / wiring 17 / markdown 47 / background 9。
+
+---
+
+## 4. 关键设计决定（别再重新讨论）
+
+| 决定 | 理由 |
+|---|---|
+| 上下文只要**题干 + 代码 + 一个测试用例** | 判题元数据（通过数、击败百分比）是噪声 |
+| **不要代码选区功能** | 力扣解法就二三十行，整份塞进去不占地方；选区反而多一步操作 |
+| 提交后**只就位，不自动发问** | 没有提问就没有模型调用（省 token，也不烦） |
+| **全量存对话**，不存模型思考 | 思路在对话里；思考占 85% 体积且不是用户的思路（v0.7 反转，原为"只存结构化事实"） |
+| **不压缩存储** | gzip 省 3~4 倍但毁掉检索，而检索是全部价值 |
+| 检索用 **LIKE 不用 FTS5** | 实测 FTS5 对中文无效（见 §9） |
+| **拆掉「结构化记忆」** | 平行维护第二份事实来源 = 不一致风险，且是模型建议的（幻觉重灾区） |
+| 默认模型 **`deepseek-v4-pro`** | `flash` 快 6 倍但**会编造不存在的 bug**（实测） |
+| 后端**无状态会话** | 会话由扩展持有每轮全量送；已发生的对话落库，后端重启不影响进行中的对话 |
+
+---
+
+## 5. 提醒：用户的工作方式
+
+- **中文交流**
+- 讨厌**过度设计**。当他说"不用做什么边界"，就是别加限制、别想太多
+- 希望**分小步做、每步验证**（我因为"整块替换"删过两次代码，见 §9）
+- 会**实机测试并反馈**，反馈通常很准
+- **不要甩锅**。承认错误、给出证据、说清哪块没验完，他接受这个
+- 他会说"先不做这个""记着以后再做"——那就真的别做，记进文档
+
+---
+
+## 6. ★ 当前这个 bug（第一优先级）
+
+### 现象
+
+v0.7.0 装上了，侧边栏**没有出现「对话 / 历史」两个标签**。
+
+### 已经确定的（别重复查）
+
+1. **后端完全正常**。用真数据端到端验证过：落库、`/history/list`、`/history/session`、
+   `/history/search`（中文命中）、`/history/stats` 全部工作。
+2. **`loadSessions()` 已经接在 `problem` 消息处理里**（`content.js` 的 `case "problem"`），
+   不是只在 boot 时调用。boot 那次确实没用（那时 slug 还是空的）。
+3. **有一次测量里，某个实例渲染出了 `tabsHidden: false, badge: "1"`** ——
+   说明 `renderTabs()` 的渲染路径本身是通的。
+4. **在活的实例上，手工补发 `problem` 消息后**：状态条**确实**更新成了我发的题名
+   （证明 `problem` 分支跑了、`loadSessions()` 被调了），但标签**仍然隐藏**，
+   而且调用记录里**没有多出一次 `historyList`**。
+
+### 最可疑的方向
+
+- `loadSessions()` 里的 `chrome.runtime.sendMessage` 抛了（被 `catch` 吞掉，
+  `S.sessions` 变成 `[]`）→ 加日志确认
+- `renderTabs()` 拿到的 `tabsEl` 不是文档里那个（`isConnected === false`）——
+  这个现象我**实测到过**，但无法确定是产品问题还是测试环境造成的
+- **测试环境干扰太大，建议先放弃在这里定位**，直接看下面
+
+### 强烈建议的做法（比继续在这里猜快得多）
+
+**给 `loadSessions()` 加日志，让用户实机跑一次，看 `server/bl-server.log`。**
+
+后端已经有日志基础设施（`log()` 写 stdout + 文件，`/diag` 收扩展汇报）。
+但 `historyList` 是走 **background → `/history/list`** 的，**后端日志会记录这次请求**：
+
+```bash
+tail -f server/bl-server.log
+```
+
+用户刷新页面后：
+- **看到 `GET /history/list`** → 说明前端确实发了请求 → 问题在渲染
+- **没看到** → 说明 `loadSessions()` 根本没走到 `sendMessage` → 问题在调用链
+
+**这一条就能把范围砍一半，而且不用跟测试环境斗。**
+
+---
+
+## 7. 调试工具箱
+
+```bash
+curl http://127.0.0.1:8787/health          # 后端在不在、模型、库状态
+curl http://127.0.0.1:8787/diag            # 扩展汇报上来的事件（时序）
+tail -f server/bl-server.log               # 后端日志（每个请求一行 + [chat] + [ext]）
+curl http://127.0.0.1:8787/debug/last-prompt   # 上一次实际发出的完整 prompt
+```
+
+侧边栏标题旁的 **`vX.Y.Z`** 是判断"扩展到底刷没刷新"的最快方式。
+**改了扩展必须点 `chrome://extensions` 的 ⟳，光刷新网页不够。**
+
+---
+
+## 8. 架构要点（改代码前看）
+
+```
+页面 (leetcode.cn)
+ ├─ MAIN world: interceptor.js   ← 只观察不改写，任何异常都吞掉
+ │    · 读题干（来自 __NEXT_DATA__，力扣不发 GraphQL 请求！）
+ │    · 读代码（当前活动编辑器的 model，不是"最长的那个"）
+ │    · 抓 submit / interpret_solution → 轮询 /check/
+ │    ↓ postMessage（走 DOM 属性传 nonce，见 ★20）
+ └─ ISOLATED: content.js  ← Shadow DOM 侧边栏，全在这里
+      ↓ chrome.runtime.connect / sendMessage
+    background.js  ← 只跟 127.0.0.1:8787 说话（绝不在 SW 里直接请求力扣）
+      ↓ SSE / JSON
+    本地后端 → SQLite
+```
+
+**两条独立的判题链路**（别混）：
+
+| | 运行 | 提交 |
+|---|---|---|
+| 接口 | `POST /problems/{slug}/interpret_solution/` | `POST /problems/{slug}/submit/` |
+| id | **字符串** `runcode_...` | 数字 |
+| 结果 | **逐用例**对比（`code_answer` / `expect_code_answer` / `compare_result` 位图） | 只有失败的**那一个**用例 |
+| 落库 | 不产生提交记录 | 产生 |
+
+**判题是异步的**：`submit` 返回时 `statusDisplay` 是**空字符串**，必须轮询到非空。
+
+---
+
+## 9. 我踩过的坑（别再踩）
+
+完整 41 条在 `docs/TECH-DESIGN.md` §7。最值得记的几条：
+
+| | 坑 | 教训 |
+|---|---|---|
+| **★20** | MAIN world 与 ISOLATED world 的 `window` **不共享**。拦截器设的 `window.__BL_NONCE__`，content script 读到的是 `undefined` → 所有消息被校验丢掉 → **插件完全没反应** | DOM 是唯一共享的。**测试必须还原 world 隔离**，两个脚本注进同一 world 会掩盖这个 bug |
+| **★29** | 大段"整块替换"式补丁会**静默删掉中间的函数** —— 一次把 `content.js` 从 1209 行砍到 721 行，而 `node --check` **依然通过** | **分小步做，每步 `assert count == 1` + 复查行数与关键函数**。排查这类问题**看浏览器异常**（`Runtime.exceptionThrown`），别靠读代码猜 |
+| **★18** | 力扣**切 tab 也会改 pathname**。按 pathname 判断"换题"会在点提交后清空对话 | 换题只比 **slug** |
+| **★36/★41** | 测试环境里 `addScriptToEvaluateOnNewDocument` 注入到**所有 frame**、且每个新 document 都跑 → content.js 跑出**多个面板实例**，文档级监听器互相干扰，UI 断言飘忽。**真实扩展一个 document 只注入一次** | 遇到这种就**立刻停手**，把确定性覆盖放到 Node 单测；别在浏览器 harness 上无限投入（我在上面浪费了很久） |
+| **★37** | FTS5 的 `unicode61` 把连续中文当成**一个 token**，搜「边界」命中 0 条 | 中文检索用 `LIKE` |
+| — | 模板字符串里写 `\n` / `\u0000` 会**在生成脚本时就被解码**，注入的源码里出现真换行/真 NUL → 语法错误 | 探测脚本里要写成 `\\n` |
+
+**更根本的一条**：`node --check` 通过 ≠ 东西还在。所以有 `extension/test/wiring.test.mjs`
+（静态检查：必需函数在不在、有没有引用未定义的函数、关键绑定在不在）。
+它**用人为破坏验证过真的会红**。
+
+---
+
+## 10. 下一步该做什么
+
+### 立刻（按顺序）
+
+1. **修 §6 那个历史标签不显示的 bug** —— 先加日志让用户实机跑，看 `bl-server.log`
+2. 让用户确认修好了
+
+### 之后（用户已明确想要，按优先级）
+
+3. **全局搜索**（跨题搜对话）。用户已同意"等攒够题量再做"，但现在历史标签有了，
+   跨题搜索的价值会很快显现
+4. **分层导师（P2）** —— 见 `docs/PRD.md` FR-7。**做之前必须先解决那里列的四个问题**，
+   而且一条硬约束：**导师的每个结论必须引用具体题目**
+
+### 还没做但不急
+
+- 对话导出（JSON / markdown）
+- 记忆库在 `~` 下建目录失败时的提示（现在会优雅降级成"无历史"，但不告诉用户）
+
+---
+
+## 11. 一些数字（避免重新测）
+
+| 项 | 值 |
+|---|---|
+| 对话存储体积 | **~3.3KB/轮** → 每天 15 轮 = 50KB/天 → **18MB/年** |
+| 上下文 token | 约 **1100~2600**（题干 518 字符 + 代码 471 字符 + prompt） |
+| `deepseek-v4-pro` 首字节 | **0.6s**（thinking 事件），正文 30~80s |
+| `deepseek-flash` | 6~10s，**但会编造不存在的 bug** |
+| 力扣 `.cn` 限流 | 社区报告 ~60 次/10 分钟。本产品**每次提交只增加 1 个请求** |
+
+---
+
+## 12. 隐私红线
+
+- **API key 只在 `server/.env`**，扩展永远拿不到（已 gitignore）
+- **登录 cookie 永不外发**。只有题干 + 代码 + 用例发给模型
+- 后端只绑 `127.0.0.1`，并拒绝非扩展来源的请求
+- 记忆库默认 `~/.better-leetcode/memory.db`（可用 `MEMORY_DB` 覆盖）
+- 仓库是**公开的**，推之前必须扫 key 和身份信息（脚本见下）
+
+```bash
+KEY=$(grep '^LLM_API_KEY=' server/.env | cut -d= -f2-)
+git grep -qF "$KEY" -- . && echo "⚠️ key 泄漏" || echo "✓ 无 key"
+grep -rInE 'drainbowdash|Rainbowdash|/Users/Admin' docs/ README.md extension/src/ server/src/ tools/
+```
+
+---
+
+## 13. 用户最近的原话（省得你猜他要什么）
+
+> 「我每次打开一遍这个对话，之前的对话不见了。这显然是不对的。」
+
+> 「很多思路的诞生都是在对话里。」
+
+> 「思考过程不存，我也看不到，对我没有任何帮助。」
+
+> 「如果已经有历史对话，就在侧边栏加历史标签。然后新题就维持原样就好了。」
+
+> 「之前那个只存要点就算了，感觉没什么用。你觉得呢？」
+
+> （关于导师）「现在也不一定要做这个功能。可以先记着以后再做。」

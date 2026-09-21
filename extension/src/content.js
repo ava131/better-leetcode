@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.7.0";
+  const VER = "0.7.1";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -77,6 +77,8 @@
     /** 历史搜索关键词与结果 */
     historyQuery: "",
     searchResults: null,
+    /** 是否已经提示过"历史已可用"（只提示一次） */
+    historyHinted: false,
   };
 
   const SUGGESTIONS_NEW = ["这题有几种解法？", "思路是什么？", "帮我分析下这题的坑"];
@@ -810,6 +812,11 @@
       S.sessions = [];
     }
     if (!S.sessions.length && S.tab === "history") switchTab("chat");
+    // 第一次攒出历史时提示一句 —— 否则用户分不清"没历史"和"功能坏了"
+    if (S.sessions.length && !S.historyHinted) {
+      S.historyHinted = true;
+      say("system", "这次对话已存到本地 —— 标题栏出现了「历史」标签，以后可以翻回来");
+    }
     renderTabs();
     if (S.tab === "history") renderHistory();
   }

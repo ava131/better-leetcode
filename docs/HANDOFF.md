@@ -135,48 +135,52 @@ cd server && MEMORY_DB=./.dev-memory.db node test/history.ts
 
 ---
 
-## 6. ★ 当前这个 bug（第一优先级）
+## 6. 那个"历史标签不显示" —— **不是 bug，已结案**
 
 ### 现象
+v0.7.0 装上后，侧边栏没有出现「对话 / 历史」两个标签。
 
-v0.7.0 装上了，侧边栏**没有出现「对话 / 历史」两个标签**。
+### 真相
+**历史是从 v0.7.0 才开始攒的。** 用户之前那些对话（v0.6.x）**从来没存过**
+（那版根本没有存储层）。查他的库：
 
-### 已经确定的（别重复查）
-
-1. **后端完全正常**。用真数据端到端验证过：落库、`/history/list`、`/history/session`、
-   `/history/search`（中文命中）、`/history/stats` 全部工作。
-2. **`loadSessions()` 已经接在 `problem` 消息处理里**（`content.js` 的 `case "problem"`），
-   不是只在 boot 时调用。boot 那次确实没用（那时 slug 还是空的）。
-3. **有一次测量里，某个实例渲染出了 `tabsHidden: false, badge: "1"`** ——
-   说明 `renderTabs()` 的渲染路径本身是通的。
-4. **在活的实例上，手工补发 `problem` 消息后**：状态条**确实**更新成了我发的题名
-   （证明 `problem` 分支跑了、`loadSessions()` 被调了），但标签**仍然隐藏**，
-   而且调用记录里**没有多出一次 `historyList`**。
-
-### 最可疑的方向
-
-- `loadSessions()` 里的 `chrome.runtime.sendMessage` 抛了（被 `catch` 吞掉，
-  `S.sessions` 变成 `[]`）→ 加日志确认
-- `renderTabs()` 拿到的 `tabsEl` 不是文档里那个（`isConnected === false`）——
-  这个现象我**实测到过**，但无法确定是产品问题还是测试环境造成的
-- **测试环境干扰太大，建议先放弃在这里定位**，直接看下面
-
-### 强烈建议的做法（比继续在这里猜快得多）
-
-**给 `loadSessions()` 加日志，让用户实机跑一次，看 `server/bl-server.log`。**
-
-后端已经有日志基础设施（`log()` 写 stdout + 文件，`/diag` 收扩展汇报）。
-但 `historyList` 是走 **background → `/history/list`** 的，**后端日志会记录这次请求**：
-
-```bash
-tail -f server/bl-server.log
+```
+~/.better-leetcode/memory.db
+  sessions:    0 行     ← 一条都没有
+  messages:    0 行
+  problems:    6 行     ← 这些是 v0.6.x 留下的
+  submissions: 8 行
 ```
 
-用户刷新页面后：
-- **看到 `GET /history/list`** → 说明前端确实发了请求 → 问题在渲染
-- **没看到** → 说明 `loadSessions()` 根本没走到 `sendMessage` → 问题在调用链
+`0 个会话` → `renderTabs()` 正确地隐藏标签。**这正是设计行为**
+（PRD FR-6：「只有存在历史对话时才显示，新题跟以前一模一样」）。
 
-**这一条就能把范围砍一半，而且不用跟测试环境斗。**
+### 但暴露了一个真的体验问题
+**用户分不清"没历史"和"功能坏了"。**
+
+修法（v0.7.1）：第一次攒出历史时，在对话里插一句系统提示
+「这次对话已存到本地 —— 标题栏出现了「历史」标签，以后可以翻回来」。
+（系统消息里不以 `────` 开头的不会进 LLM payload，只是 UI 提示。）
+
+### 这里留下的教训
+排查这类"功能没出现"的问题，**先查数据、再查代码**。
+我在这上面先在浏览器测试环境里耗了很久，而正确答案在
+`~/.better-leetcode/memory.db` 里一条查询就能看到：
+
+```bash
+node -e "
+const {DatabaseSync}=require('node:sqlite');
+const db=new DatabaseSync(process.env.HOME+'/.better-leetcode/memory.db',{readOnly:true});
+for (const t of ['sessions','messages','problems'])
+  console.log(t, db.prepare('select count(*) c from '+t).get().c);
+"
+```
+
+### 还没验证的一环
+「聊一次之后标签确实会出现」——**这一环只能实机确认**。
+后端已经端到端验证过（落库、列表、搜索都通），渲染路径也在一次测量里
+渲染出过 `hidden:false, badge:"1"`。如果用户聊完还是不出现，那才是真 bug，
+**此时先看 `bl-server.log` 里有没有 `GET /history/list`**（见 §7）。
 
 ---
 
@@ -244,10 +248,10 @@ curl http://127.0.0.1:8787/debug/last-prompt   # 上一次实际发出的完整 
 
 ## 10. 下一步该做什么
 
-### 立刻（按顺序）
+### 立刻
 
-1. **修 §6 那个历史标签不显示的 bug** —— 先加日志让用户实机跑，看 `bl-server.log`
-2. 让用户确认修好了
+1. **让用户实机确认「聊一次之后历史标签出现」**（见 §6 末）。
+   不出现才是真 bug，先看 `bl-server.log` 里有没有 `GET /history/list`
 
 ### 之后（用户已明确想要，按优先级）
 

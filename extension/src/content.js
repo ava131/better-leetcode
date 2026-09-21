@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.7.1";
+  const VER = "0.7.2";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -144,6 +144,15 @@
 .wrap.side-left  { left: 12px; }
 .wrap.dragging { box-shadow: 0 14px 44px rgba(0,0,0,.22); opacity: .96; }
 .wrap.dragging .hd { cursor: grabbing; }
+/* 用户往上翻之后，右下角浮出「回到底部」 */
+.jump { position: absolute; right: 14px; bottom: 54px; z-index: 3;
+  border: 1px solid #c7d2fe; background: #fff; color: #4338ca; font-size: 11px;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.jump[hidden] { display: none; }
+.jump:hover { background: #eef2ff; }
+@media (prefers-color-scheme: dark) { .jump { background: #111827; } }
+
 /* 左下角的尺寸把手（面板贴右边，所以往左拖是变宽） */
 .grip { position: absolute; bottom: 0; width: 18px; height: 18px; touch-action: none; z-index: 2; }
 .wrap.side-right .grip { left: 0; cursor: nesw-resize; }
@@ -332,7 +341,7 @@
 @media (prefers-color-scheme: dark) { .msg.assistant .note { border-top-color: #4b5563; } }
 `;
 
-  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl;
+  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl, jumpEl;
 
   /** 小球的形象图。拿不到 URL 就退回文字标（测试环境里 chrome.runtime 可能是 stub） */
   let PET = "";
@@ -379,6 +388,7 @@
         <textarea class="input" rows="1" placeholder="问点什么…  Enter 发送 · Shift+Enter 换行"></textarea>
         <button class="send">发送</button>
       </div>
+      <button class="jump" hidden title="回到底部（有新内容）">↓ 新内容</button>
       <div class="grip" title="拖动调整大小"></div>`;
     root.appendChild(wrap);
 
@@ -402,6 +412,20 @@
     chipsEl = root.querySelector(".chips");
     inputEl = root.querySelector(".input");
     sendEl = root.querySelector(".send");
+    jumpEl = root.querySelector(".jump");
+    if (bodyEl) {
+      bodyEl.addEventListener("scroll", () => {
+        // 代码自己滚出来的 scroll 事件不代表用户意图，丢掉
+        if (selfScrollTop !== null && bodyEl.scrollTop === selfScrollTop) {
+          selfScrollTop = null;
+          return;
+        }
+        selfScrollTop = null;
+        stickToBottom = nearBottom();
+        updateJumpBtn();
+      });
+    }
+    if (jumpEl) jumpEl.onclick = jumpToBottom;
     modelEl = root.querySelector(".model");
 
     pinEl = root.querySelector('[data-act="pin"]');
@@ -776,7 +800,7 @@
       else d.textContent = m.content;
       bodyEl.appendChild(d);
     }
-    bodyEl.scrollTop = bodyEl.scrollHeight;
+    autoScroll();
   }
 
   // ───────────────────────── 历史 ─────────────────────────
@@ -1014,6 +1038,61 @@
     }
   }
 
+  // ─────────── 滚动跟随 ───────────
+  //
+  // ★ 之前是每收到一个 token 就无条件 scrollTop = scrollHeight ——
+  //   于是用户想往上翻的时候，下一个 token 立刻把他拽回底部，**根本翻不上去**。
+  //   改成标准做法：**只有本来就贴着底才跟随**；一旦你往上滚就停止跟随，
+  //   并给一个「回到底部」按钮。这样输出再快也不影响你按自己的节奏读。
+
+  const NEAR_BOTTOM_PX = 48;
+  /** 回答开头往上留一点，能看到上一轮的尾巴才不会"断片" */
+  const ANCHOR_LEAD_PX = 56;
+  let stickToBottom = true;
+  let streaming = false; // 正在出字 → 按钮说"新内容"，否则说"回到底部"
+  /**
+   * 我们自己刚设过的 scrollTop。
+   *
+   * ★ 必须把"代码滚的"和"用户滚的"分开：`anchor()` 把回答开头对齐到视口后
+   *   设 stickToBottom = false，但它顺手写 scrollTop 会**触发一次 scroll 事件**，
+   *   监听器一算"现在贴着底呀"，又把 stickToBottom 翻回 true —— 于是流式期间
+   *   又开始追尾部，用户还是看不过来。真浏览器里就是这么复现的
+   *   （scrollTop 1065 → 1528 → 1991 一路跟着走）。
+   */
+  let selfScrollTop = null;
+
+  function nearBottom() {
+    if (!bodyEl) return true;
+    return bodyEl.scrollHeight - bodyEl.scrollTop - bodyEl.clientHeight <= NEAR_BOTTOM_PX;
+  }
+
+  /** 只有我们自己的滚动才走这里 —— 记下实际值（可能被夹到底部） */
+  function setScrollTop(v) {
+    if (!bodyEl) return;
+    bodyEl.scrollTop = v;
+    selfScrollTop = bodyEl.scrollTop;
+  }
+
+  function updateJumpBtn() {
+    if (!jumpEl) return;
+    jumpEl.hidden = stickToBottom;
+    jumpEl.textContent = streaming ? "↓ 新内容" : "↓ 回到底部";
+  }
+
+  /** 贴底才跟随；用户滚上去过就不再打断他 */
+  function autoScroll(force) {
+    if (!bodyEl) return;
+    if (!force && !stickToBottom) return;
+    setScrollTop(bodyEl.scrollHeight);
+  }
+
+  /** 点了「回到底部」：重新跟随并跳下去 */
+  function jumpToBottom() {
+    stickToBottom = true;
+    updateJumpBtn();
+    autoScroll(true);
+  }
+
   function appendMessage(role, content) {
     S.messages.push({ role, content });
     const d = document.createElement("div");
@@ -1021,7 +1100,7 @@
     if (role === "assistant") d.innerHTML = md(content);
     else d.textContent = content;
     bodyEl.appendChild(d);
-    bodyEl.scrollTop = bodyEl.scrollHeight;
+    autoScroll();
     return d;
   }
 
@@ -1047,6 +1126,21 @@
     let gotContent = false;
 
     return {
+      /**
+       * 把这条回答的开头对齐到视口，然后**停止追尾部**。
+       *
+       * 用户的原话：「他很快一下子全部输出，根本看不过来，还得往上回去翻」。
+       * 追尾部的做法下，字还没读完就被顶走 —— 所以这里的默认策略是
+       * **停在回答开头，你自己往下读**，输出多快都不影响你。
+       * 想跟着尾部看，点右下角「↓ 新内容」；自己滚到底也会自动恢复跟随。
+       */
+      anchor() {
+        if (!bodyEl) return;
+        stickToBottom = false;
+        const top = d.offsetTop - bodyEl.offsetTop;
+        setScrollTop(Math.max(0, top - ANCHOR_LEAD_PX));
+        updateJumpBtn();
+      },
       /** 收到第一个字节 —— 从"连接中"切到"思考中" */
       connected() {
         const l = think.querySelector(".tlabel");
@@ -1056,7 +1150,7 @@
         thinkChars += t.length;
         const c = think.querySelector(".tcount");
         if (c) c.textContent = `${Math.round(thinkChars / 2)} 字`;
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        autoScroll();
       },
       push(t) {
         if (!gotContent) {
@@ -1066,13 +1160,13 @@
         buf += t;
         // 实时剥掉 <memory>…</memory>，别让它闪出来
         content.textContent = stripMemory(buf);
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        autoScroll();
       },
       finish() {
         think.remove();
         const shown = stripMemory(buf);
         content.innerHTML = md(shown);
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        autoScroll();
         return shown; // ← 返回剥过的，存进 S.messages 的也是剥过的
       },
       /** 在正文后面加一行小字（例如"已停止"），不影响已经流出来的内容 */
@@ -1083,7 +1177,7 @@
         n.className = "note";
         n.textContent = text;
         d.appendChild(n);
-        bodyEl.scrollTop = bodyEl.scrollHeight;
+        autoScroll();
       },
       fail(msg) {
         think.remove();
@@ -1202,12 +1296,16 @@
 
     inputEl.value = "";
     inputEl.style.height = "auto";
+    // 上一轮可能停在滚动条中间，自己刚发的问题必须先带进视野
+    stickToBottom = true;
     appendMessage("user", text);
     saveSession(); // 先存一次：万一回复途中刷新，用户这句不至于丢
 
     sending = true;
+    streaming = true;
     setSendMode("stop");
     const bubble = beginStreamBubble();
+    bubble.anchor(); // ★ 停在这条回答的开头，不追尾部（见 anchor 的注释）
 
     const payload = {
       sessionId: sessionId(),
@@ -1246,6 +1344,8 @@
       clearTimers();
       abortCurrent = null;
       sending = false;
+      streaming = false;
+      updateJumpBtn();
       setSendMode("send");
       if (msg) {
         if (opts.keepContent) bubble.note(msg);

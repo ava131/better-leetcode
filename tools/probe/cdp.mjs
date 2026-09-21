@@ -198,8 +198,10 @@ export const READ_SIDEBAR = `(() => {
 
 /** 给隔离 world 用的最小 chrome.* stub（模拟扩展环境） */
 export const CHROME_STUB = `
-window.__sess = {}; window.__local = {}; window.__diag = [];
-window.chrome = {
+// ★ 这段代码要能被**重复执行**（同一 realm 里重跑一次不该炸），
+//   所以一律挂在 window 上，不用const/let —— 见下面 __blInstallChromeStub。
+window.__sess = window.__sess || {}; window.__local = window.__local || {}; window.__diag = window.__diag || [];
+window.__blStub = window.__blStub || {
   storage: {
     // 真的存起来，方便断言"偏好有没有持久化"
     local: {
@@ -219,9 +221,28 @@ window.chrome = {
   runtime: {
     // 模拟后端：发一条假回复再 done，这样 sending 会复位，能连着测多次发送。
     // 把 window.__blStubHang 设成 true 就不回复 —— 用来测「停止」按钮和超时。
+    // 把 window.__blStubLong 设成 true 就**慢慢流一大段**（60 个 delta），
+    //   用来测滚动行为：内容一直在长，正好看"会不会追尾部"。
     connect: () => {
       const handlers = [];
       const reply = (m) => { if (!window.__blStubHang) handlers.forEach((h) => h(m)); };
+      if (window.__blStubLong) {
+        // true → 默认 60 段 × 20ms；也可以给 { n, ms } 精确控制时长
+        const cfg = window.__blStubLong === true ? { n: 60, ms: 20 } : window.__blStubLong;
+        let n = 0;
+        const tick = setInterval(() => {
+          n++;
+          reply({ type: "thinking", text: "想一下这个问题。" });
+          reply({ type: "delta", text: "第 " + n + " 段：这里是一段用来撑高对话的测试文本，验证滚动跟随。" });
+          if (n >= cfg.n) { clearInterval(tick); reply({ type: "done", chars: n * 40 }); }
+        }, cfg.ms);
+        return {
+          onMessage: { addListener: (f) => handlers.push(f) },
+          onDisconnect: { addListener: () => {} },
+          postMessage: () => {},
+          disconnect: () => { clearInterval(tick); },
+        };
+      }
       setTimeout(() => reply({ type: "delta", text: "（stub）" }), 60);
       setTimeout(() => reply({ type: "done", chars: 6 }), 140);
       return {
@@ -239,4 +260,25 @@ window.chrome = {
     },
   },
 };
+
+// ★ 不能直接给 window.chrome 赋值就完事：Chrome 自己也有个 window.chrome
+//   （loadTimes/csi），会在 document-start 之后覆盖掉我们的桩。症状是
+//   backendOk 永远 false —— 所有"点发送"的用例都变成「后端没连上」，
+//   看起来像扩展坏了。所以用**数据属性**占位，并在启动阶段补装几次。
+window.__blInstallChromeStub = () => {
+  try {
+    Object.defineProperty(window, "chrome", {
+      configurable: true,
+      writable: true,
+      value: window.__blStub,
+    });
+  } catch {
+    try { window.chrome = window.__blStub; } catch {}
+  }
+  return typeof window.chrome?.runtime?.sendMessage;
+};
+window.__blInstallChromeStub();
+document.addEventListener("readystatechange", window.__blInstallChromeStub, true);
+setTimeout(window.__blInstallChromeStub, 0);
+setTimeout(window.__blInstallChromeStub, 100);
 `;

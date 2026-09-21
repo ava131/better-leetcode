@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI 刷题小助手",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "把题干、你的代码和判题/运行结果自动送进对话，不用再复制粘贴。",
   "minimum_chrome_version": "111",
   "permissions": [

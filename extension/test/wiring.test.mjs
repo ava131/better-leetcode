@@ -170,5 +170,41 @@ console.log("\n=== 9) 会话里不能残留 <memory> 标签 ===");
 check("渲染层会剥掉 <memory>", SRC.includes("stripMemory"));
 check("markdown.js 导出了 stripMemory", read("markdown.js").includes("stripMemory"));
 
+console.log("\n=== 10) 滚动：不能每来一个 token 就把用户拽回底部 ===");
+// 用户报的 bug：输出的时候往上翻不动，一直被拉回去。
+// 原因是 `bodyEl.scrollTop = bodyEl.scrollHeight` 无条件执行了 6 次。
+{
+  check(
+    "autoScroll 滚到底也只走 setScrollTop（唯一写入口）",
+    /setScrollTop\(bodyEl\.scrollHeight\);/.test(SRC)
+  );
+  check("有贴底判定 nearBottom", /function\s+nearBottom\s*\(/.test(SRC));
+  check("有 stickToBottom 状态", SRC.includes("stickToBottom"));
+  check("autoScroll 会先看 stickToBottom", /if\s*\(\s*!force\s*&&\s*!stickToBottom\s*\)\s*return;/.test(SRC));
+  check("监听了 bodyEl 的 scroll", /bodyEl\.addEventListener\("scroll"/.test(SRC));
+  const uses = SRC.match(/autoScroll\(\)/g) || [];
+  check(`流式/追加路径都改用了 autoScroll（${uses.length} 处）`, uses.length >= 6, uses.length);
+  check("有「回到底部」按钮", SRC.includes('class="jump"') && SRC.includes("jumpToBottom"));
+
+  // 光"不追尾部"还不够：发出去之后得把回答的开头带进视野，
+  // 否则内容全长在屏幕外面，用户看到的是"没反应"。
+  check("beginStreamBubble 暴露了 anchor()", /anchor\(\)\s*\{/.test(SRC));
+  check("send() 里调用了 bubble.anchor()", /bubble\.anchor\(\);/.test(SRC));
+  check(
+    "发完不再回头强制贴底",
+    !/const bubble = beginStreamBubble\(\);\s*bubble\.anchor\(\);\s*stickToBottom = true;/.test(SRC)
+  );
+
+  // ★ 真浏览器里抓到的第二个洞：anchor() 自己写 scrollTop 会触发 scroll 事件，
+  //   监听器一算"贴着底"，把 stickToBottom 又翻回 true，于是照样追尾部。
+  const writes = SRC.match(/bodyEl\.scrollTop\s*=[^=]/g) || [];
+  check("scrollTop 只有一处赋值（都在 setScrollTop 里）", writes.length === 1, writes.length);
+  check("有 selfScrollTop 用来认出自己的滚动", SRC.includes("selfScrollTop"));
+  check(
+    "scroll 监听会丢掉自己滚出来的事件",
+    /selfScrollTop !== null && bodyEl\.scrollTop === selfScrollTop/.test(SRC)
+  );
+}
+
 console.log(`\n${"─".repeat(48)}\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

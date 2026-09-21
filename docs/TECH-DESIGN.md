@@ -557,6 +557,10 @@ submissions(id, problem_id, lang, verdict, passed, total, created_at)
 | **★39** | 会话列表按 `last_at` 排序**会并列**（`toISOString()` 毫秒精度，测试里一次跑好几条） | 按"最后一条消息 id"排——单调递增，不会并列 |
 | **★40** | `<div class="tabs">` 上的 `hidden` 属性 vs `tabsEl.hidden = false`：**布局没问题，但我在测试里读错了面板**（见 ★36） | — |
 | **★41** | `Page.addScriptToEvaluateOnNewDocument` 会注入到**所有 frame**，页面里的 iframe 也会跑 content script | 测试工具 `evalInWorld` 已经按主 frame 过滤（见 §7 ★22） |
+| **★42** | **流式输出时每收到一个 token 就无条件 `bodyEl.scrollTop = bodyEl.scrollHeight`**（6 处），用户往上滚一格就被拽回底部 → 用户原话「他输出的时候，我还往上翻不了」 | 标准做法：**贴底才跟随**。`nearBottom()`（阈值 48px）+ `stickToBottom` 状态 + `bodyEl` 的 `scroll` 监听；不贴底就一个字节都不碰滚动位置 |
+| **★43** | **`anchor()` 自己写 `scrollTop` 会触发一次 `scroll` 事件**，监听器一算"现在贴着底呀"就把 `stickToBottom` 翻回 `true` → 又开始追尾部。真浏览器里复现为 `scrollTop` 1065 → 1528 → 1991 一路跟着走，而**静态检查全绿** | 必须把"代码滚的"和"用户滚的"分开：唯一写入口 `setScrollTop()` 记下 `selfScrollTop`，`scroll` 监听发现 `scrollTop === selfScrollTop` 就直接 return，不改用户意图。**"代码自己要滚"和"用户要滚"是两种意图，不能共用一套几何判断** |
+| **★44** | 探针的 `CHROME_STUB` 是**模板字符串**，里面写 `
+` 会被解成真换行 → 注入的桩代码 `SyntaxError` → **整段桩压根没跑** → 扩展以为后端没连上 → `ui-wiring.mjs` 10 条全红，看起来像扩展坏了，其实是脚手架坏了。`node --check tools/probe/cdp.mjs` **查不出来** | 凡是要注入页面的代码，都先当**独立文件**跑一次语法检查 —— 见 `tools/probe/selfcheck.mjs`（不开浏览器，13 项）。这个坑我踩过两次 |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |

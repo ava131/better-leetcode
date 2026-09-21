@@ -206,5 +206,15 @@ console.log("\n=== 10) 滚动：不能每来一个 token 就把用户拽回底�
   );
 }
 
+console.log("\n=== 11) 版本号别跟 manifest 走散 ===");
+// 面板标题旁的 vX.Y.Z 是判断"扩展到底刷没刷新"的唯一可信信号（HANDOFF §7），
+// 两处写岔了就会骗人。
+{
+  const mf = JSON.parse(readFileSync(resolve(HERE, "../manifest.json"), "utf8"));
+  const m = SRC.match(/const VER = "([^"]+)"/);
+  check("content.js 里有 VER 常量", !!m, SRC.match(/const VER[^\n]*/)?.[0]);
+  check(`VER 与 manifest 一致（${mf.version}）`, m && m[1] === mf.version, m && m[1]);
+}
+
 console.log(`\n${"─".repeat(48)}\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

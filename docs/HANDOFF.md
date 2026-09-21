@@ -240,7 +240,7 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
 
 ## 9. 我踩过的坑（别再踩）
 
-完整 41 条在 `docs/TECH-DESIGN.md` §7。最值得记的几条：
+完整 44 条在 `docs/TECH-DESIGN.md` §7。最值得记的几条：
 
 | | 坑 | 教训 |
 |---|---|---|

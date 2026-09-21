@@ -217,11 +217,13 @@ window.chrome = {
     },
   },
   runtime: {
-    // 模拟后端：发一条假回复再 done，这样 sending 会复位，能连着测多次发送
+    // 模拟后端：发一条假回复再 done，这样 sending 会复位，能连着测多次发送。
+    // 把 window.__blStubHang 设成 true 就不回复 —— 用来测「停止」按钮和超时。
     connect: () => {
       const handlers = [];
-      setTimeout(() => handlers.forEach((h) => h({ type: "delta", text: "（stub）" })), 60);
-      setTimeout(() => handlers.forEach((h) => h({ type: "done", chars: 6 })), 140);
+      const reply = (m) => { if (!window.__blStubHang) handlers.forEach((h) => h(m)); };
+      setTimeout(() => reply({ type: "delta", text: "（stub）" }), 60);
+      setTimeout(() => reply({ type: "done", chars: 6 }), 140);
       return {
         onMessage: { addListener: (f) => handlers.push(f) },
         onDisconnect: { addListener: () => {} },

@@ -42,17 +42,25 @@ await cdp.addInitScript(readFileSync(resolve(EXT_SRC, "markdown.js"), "utf8"), "
 await cdp.addInitScript(readFileSync(resolve(EXT_SRC, "content.js"), "utf8"), "bl_ext");
 await cdp.navigate("https://leetcode.cn/problems/linked-list-cycle/");
 await sleep(14000);
-// 说明：测试环境里 content.js 可能跑多次、叠出多个面板（真实扩展只有一个）。
-// 点击命中的是最上面那个，而 getElementById 返回第一个 —— 两者可能不是同一个，
-// 所以下面统一用 SR（第一个）读写，并在每条断言里给足容差。
-// 这些断言守的是"绑定还在不在"，不是像素级行为。
-
-// 测试环境里可能叠了多个（SPA 反复导航），点击命中的是最上面那个 —— 就测它
-const SR = `document.getElementById('better-leetcode-host').shadowRoot`;
+// ⚠️ 测试环境里 content.js 可能跑出**多个面板**，而且各自的后端连接状态可能不同
+//    （真实扩展一个 document 只注入一次，所以只有一个）。
+//    所以每次求值都现场挑一个"活着"的（状态条不是"后端未连接"）；
+//    都活着就取最后一个 —— 它在最上面，鼠标点击命中的正是它。
+const SRX = `(() => {
+  const hosts = [...document.querySelectorAll('#better-leetcode-host')];
+  const alive = hosts.filter((h) => {
+    const t = h.shadowRoot?.querySelector('.status')?.textContent || '';
+    return !t.includes('后端未连接');
+  });
+  return (alive.length ? alive : hosts).pop()?.shadowRoot || null;
+})()`;
+const SR = `(${SRX})`;
 
 const setInput = (text) =>
   cdp.eval(`(() => {
-    const i = ${SR}.querySelector('.input');
+    const sr = ${SR};
+    if (!sr) return null;
+    const i = sr.querySelector('.input');
     i.value = ${JSON.stringify(text)};
     i.dispatchEvent(new Event('input', { bubbles: true }));
     i.focus();
@@ -62,6 +70,7 @@ const setInput = (text) =>
 const state = async () => {
   const raw = await cdp.eval(`(() => {
     const sr = ${SR};
+    if (!sr) return JSON.stringify({ err: 'no panel' });
     return JSON.stringify({
       input: sr.querySelector('.input').value,
       users: [...sr.querySelectorAll('.msg.user')].map((m) => m.textContent),
@@ -148,6 +157,39 @@ await setInput("拉大后回车");
 await pressEnter(false);
 s = await state();
 check("拉大后回车仍然有效", s.users.includes("拉大后回车"), s.users);
+
+console.log("\n=== 7) 卡住时能停下来（后端连不上/不响应）===");
+// 让 stub 不回复，模拟"后端没响应"
+await cdp.evalInWorld("bl_ext", `window.__blStubHang = true; "ok"`);
+await setInput("卡住测试");
+await cdp.eval(`${SR}.querySelector('.send').click()`);
+await sleep(1200);
+let btn = await cdp.eval(`(()=>{const b=${SR}.querySelector('.send');
+  return JSON.stringify({text:b.textContent, stop:b.classList.contains('stop'), disabled:b.disabled});})()`);
+let bj = JSON.parse(btn);
+check("发送中按钮变成「停止」", bj.text === "停止" && bj.stop === true, btn);
+check("停止按钮可点（不是禁用状态）", bj.disabled === false, btn);
+check("气泡先是「连接中…」而不是「思考中…」",
+  await cdp.eval(`${SR}.querySelector('.thinking .tlabel')?.textContent === "连接中…"`),
+  await cdp.eval(`${SR}.querySelector('.thinking .tlabel')?.textContent`));
+
+// 点「停止」
+await cdp.eval(`${SR}.querySelector('.send').click()`);
+await sleep(600);
+btn = await cdp.eval(`(()=>{const b=${SR}.querySelector('.send');
+  return JSON.stringify({text:b.textContent, stop:b.classList.contains('stop')});})()`);
+bj = JSON.parse(btn);
+check("点停止后按钮变回「发送」", bj.text === "发送" && !bj.stop, btn);
+check("显示了「已停止」",
+  await cdp.eval(`(${SR}.textContent||'').includes("已停止")`),
+  await cdp.eval(`${SR}.querySelector('.note')?.textContent`));
+
+console.log("\n=== 8) 停止之后还能继续发（不会卡死）===");
+await cdp.evalInWorld("bl_ext", `window.__blStubHang = false; "ok"`);
+await setInput("停止后重发");
+await pressEnter(false);
+s = await state();
+check("停止后能正常再发一条", s.users.includes("停止后重发"), s.users);
 
 console.log(`\n${"─".repeat(48)}\n结果: ${pass} 通过, ${fail} 失败`);
 process.exit(fail ? 1 : 0);

@@ -54,28 +54,6 @@ export interface RunResult {
   compileError?: string | null;
 }
 
-export interface StuckPoint {
-  desc: string;
-  insight?: string | null;
-  count: number;
-  first?: string;
-  last?: string;
-}
-
-export interface Approach {
-  name: string;
-  time?: string | null;
-  space?: string | null;
-  mastered: boolean;
-  evidence?: string | null;
-  note?: string | null;
-}
-
-export interface Memory {
-  stuckPoints: StuckPoint[];
-  approaches: Approach[];
-}
-
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;

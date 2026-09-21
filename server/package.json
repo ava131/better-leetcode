@@ -9,7 +9,7 @@
     "dev": "node --watch src/index.ts",
     "dry": "node src/cli.ts --dry-run",
     "ask": "node src/cli.ts",
-    "test": "rm -f .dev-memory.db* && MEMORY_DB=./.dev-memory.db node test/smoke.ts"
+    "test": "rm -f .dev-memory.db* && MEMORY_DB=./.dev-memory.db node test/smoke.ts && MEMORY_DB=./.dev-memory.db node test/history.ts"
   },
   "engines": {
     "node": ">=24"

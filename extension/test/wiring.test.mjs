@@ -38,13 +38,15 @@ console.log("=== 1) 关键函数都得在 ===");
 // 少一个都会让某个功能静默失效
 const REQUIRED_FNS = [
   "build", "boot", "send", "say", "diag",
-  "statusLine", "renderMessages", "renderChips", "renderMemoryCards",
+  "statusLine", "renderMessages", "renderChips",
   "appendMessage", "beginStreamBubble", "md2messages",
   "applySubmission", "applyRun", "resetSession",
   "saveSession", "restoreSession",
   "snapshotCode", "requestProblem", "handshake", "postToSelf",
   "setCollapsed", "applySide", "applyPinUI",
-  "applyPanelLayout", "applyBallLayout", "snapToSide", "saveLayout",
+  "applyPanelLayout", "applyBallLayout", "snapToSide", "saveLayout", "setSendMode",
+  "switchTab", "renderTabs", "loadSessions", "openSession", "searchHistory",
+  "continueSession", "renderHistory", "parseSnapshot", "snapshotDetails", "fmtTime",
   "slugFromPath", "syncModels", "sessionId", "updateAll",
 ].filter((f) => f !== "md2messages"); // 占位，避免误报
 
@@ -101,6 +103,16 @@ const BINDINGS = [
   ["hdEl.addEventListener", "拖动面板"],
   ["gripEl.addEventListener", "拖动调大小"],
   ["ball.addEventListener", "拖动小球"],
+  ["setSendMode", "发送/停止切换"],
+  ["abortCurrent", "停止按钮的中止函数"],
+  ["CONNECT_TIMEOUT_MS", "连接超时"],
+  ["GAP_TIMEOUT_MS", "断流超时"],
+  ["port.onDisconnect.addListener", "端口断开复位"],
+  ['data-tab="history"', "历史标签按钮"],
+  ["historyList", "拉会话列表"],
+  ["historySession", "读某个会话"],
+  ["historySearch", "搜对话"],
+  ["continueSession", "继续这条"],
 ];
 const missingBind = BINDINGS.filter(([pat]) => !SRC.includes(pat)).map(([, label]) => label);
 check(`关键绑定齐全（${BINDINGS.length} 处）`, missingBind.length === 0, missingBind.join(", "));
@@ -122,8 +134,12 @@ check(`关键元素齐全（${ELEMENTS.length} 个）`, missingEl.length === 0, 
 
 console.log("\n=== 5) 没有残留的旧代码 ===");
 const STALE = ["autoHide", "scheduleHide", "cancelHide", "saveBallPos", "applyBallPos", "applyPanelSize"];
+// 结构化记忆（卡点/掌握度）已经拆掉，不该再有残留
+const STALE_MEMORY = ["renderMemoryCards", "memory_suggestion", "memory/confirm"];
 const stale = STALE.filter((p) => SRC.includes(p));
 check("无旧 API 残留", stale.length === 0, stale.join(", "));
+const staleMem = STALE_MEMORY.filter((x) => SRC.includes(x) || BG.includes(x));
+check("结构化记忆已拆干净", staleMem.length === 0, staleMem.join(", "));
 
 console.log("\n=== 6) background.js：done 只能发一次 ===");
 // 上游 SSE 有自己的 done，循环结束还会补一个兜底的 —— 不记账就会发两个，

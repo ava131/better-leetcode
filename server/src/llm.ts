@@ -5,7 +5,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { buildMessages } from "./context.ts";
-import type { ChatRequest, Memory, MemorySuggestion } from "./types.ts";
+import type { ChatRequest, MemorySuggestion } from "./types.ts";
 
 export function loadEnv(path: string): void {
   if (existsSync(path)) {
@@ -63,7 +63,6 @@ export interface StreamChunk {
 /** 流式对话 */
 export async function* streamChat(
   req: ChatRequest,
-  memory: Memory | null | undefined,
   systemPrompt: string,
   opts: StreamOptions = {}
 ): AsyncGenerator<StreamChunk, void, unknown> {
@@ -75,7 +74,7 @@ export async function* streamChat(
   if (!apiKey) throw new Error("未设置 LLM_API_KEY");
   if (!model) throw new Error("未设置 LLM_MODEL");
 
-  const messages = buildMessages(req, memory, systemPrompt);
+  const messages = buildMessages(req, systemPrompt);
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",

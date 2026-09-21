@@ -3,14 +3,16 @@
  * 本地后端。只绑 127.0.0.1。
  *
  *   POST /chat               SSE 流式对话
- *   GET  /memory/:slug       读某题记忆
- *   POST /memory/confirm     显式写入（用户点了「记下来」才调）
- *   GET  /memory/overview    掌握度矩阵 + 跨题高频卡点
+ *   GET  /history/list       某题的会话列表
+ *   GET  /history/session    某个会话的全部消息
+ *   GET  /history/search     在某题里搜对话
+ *   GET  /history/stats      总量统计
  *   GET  /health             扩展启动探测
  *   GET  /debug/last-prompt  dump 上一次实际发出的完整 prompt（调 prompt 用）
  *
- * **无状态**：会话（对话历史 + 代码快照）由扩展持有，每轮全量送上来。
- * 这样后端重启不丢会话，也没有同步问题。
+ * **对话协商**：会话状态（当前这轮的历史 + 代码快照）由扩展持有，每轮全量送上来，
+ * 所以后端重启不影响正在进行的对话。而**已发生的对话落库**（history.ts），
+ * 换页/重开也能翻回来。
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -20,13 +22,18 @@ import { fileURLToPath } from "node:url";
 import { buildMessages, renderForReview } from "./context.ts";
 import { loadEnv, streamChat, stripMemoryBlocks, allowedModels, defaultModel } from "./llm.ts";
 import {
-  getMemory,
-  getOverview,
-  confirmSuggestion,
+  dbStatus,
   upsertProblem,
   recordSubmission,
-  memoryStatus,
-} from "./memory.ts";
+  ensureSession,
+  appendMessage,
+  snapshotOf,
+  lastUserMessage,
+  listSessions,
+  getSessionMessages,
+  searchMessages,
+  historyStats,
+} from "./history.ts";
 import { htmlToMarkdown } from "./html.ts";
 import type { ChatRequest, MemorySuggestion } from "./types.ts";
 
@@ -164,7 +171,7 @@ const server = createServer(async (req, res) => {
         models: allowedModels(),
         baseUrl: process.env.LLM_BASE_URL ?? null,
         hasKey: !!process.env.LLM_API_KEY,
-        memory: memoryStatus(),
+        db: dbStatus(),
       });
     }
 
@@ -195,27 +202,20 @@ const server = createServer(async (req, res) => {
       return res.end(`# 发送于 ${lastPrompt.at}\n\n${lastPrompt.rendered}`);
     }
 
-    // ---------- 读记忆 ----------
-    if (path.startsWith("/memory/") && req.method === "GET") {
-      const slug = decodeURIComponent(path.slice("/memory/".length));
-      if (slug === "overview") return json(res, 200, getOverview());
-      return json(res, 200, getMemory(slug) ?? { stuckPoints: [], approaches: [] });
+    // ---------- 对话历史 ----------
+    if (path === "/history/list" && req.method === "GET") {
+      return json(res, 200, { sessions: listSessions(url.searchParams.get("slug") || "") });
     }
-
-    // ---------- 显式写入记忆 ----------
-    if (path === "/memory/confirm" && req.method === "POST") {
-      const body = await readBody(req);
-      const { slug, suggestions, problem } = body as {
-        slug: string;
-        suggestions: MemorySuggestion[];
-        problem?: ChatRequest["problem"];
-      };
-      if (!slug || !Array.isArray(suggestions)) {
-        return json(res, 400, { error: "需要 slug 和 suggestions" });
-      }
-      if (problem) upsertProblem(problem);
-      const results = suggestions.map((s) => confirmSuggestion(slug, s));
-      return json(res, 200, { results });
+    if (path === "/history/session" && req.method === "GET") {
+      return json(res, 200, { messages: getSessionMessages(url.searchParams.get("id") || "") });
+    }
+    if (path === "/history/search" && req.method === "GET") {
+      return json(res, 200, {
+        results: searchMessages(url.searchParams.get("slug") || "", url.searchParams.get("q") || ""),
+      });
+    }
+    if (path === "/history/stats" && req.method === "GET") {
+      return json(res, 200, historyStats());
     }
 
     // ---------- 记录提交（只存元数据，不存代码） ----------
@@ -259,22 +259,38 @@ const server = createServer(async (req, res) => {
         else console.warn(`[chat] 拒绝未在白名单内的模型 "${requested}"，回退到 ${useModel}`);
       }
 
-      // 题目元信息入库（外键锚点，不算"记忆"）
+      // 题目元信息入库（外键锚点）
       if (chatReq.problem?.id) upsertProblem(chatReq.problem);
-      const memory = getMemory(chatReq.problem.slug);
+
+      // ★ 落库：用户这条先写。中途刷新/断线也不至于丢。
+      const userMsg = lastUserMessage(chatReq.messages);
+      if (chatReq.sessionId && userMsg) {
+        ensureSession(chatReq.sessionId, chatReq.problem, userMsg);
+        appendMessage({
+          sessionId: chatReq.sessionId,
+          problemId: chatReq.problem?.id ?? null,
+          slug: chatReq.problem?.slug,
+          role: "user",
+          content: userMsg,
+          snapshot: snapshotOf({
+            code: chatReq.code, lang: chatReq.lang, verdict: chatReq.verdict,
+            testcase: chatReq.testcase, run: chatReq.run,
+          }),
+        });
+      }
 
       log(
         `[chat] 题=${chatReq.problem.title || chatReq.problem.slug} ` +
           `模型=${useModel} 判定=${chatReq.verdict ?? "无"} ` +
           `用例=${chatReq.testcase ? "有" : "无"} ` +
           `代码=${chatReq.code?.length ?? 0}字符 题干=${chatReq.problem.content?.length ?? 0}字符 ` +
-          `历史=${chatReq.messages?.length ?? 0}条 记忆=${memory ? `${memory.stuckPoints.length}卡点/${memory.approaches.length}解法` : "无"} ` +
+          `历史=${chatReq.messages?.length ?? 0}条 ` +
           `问题="${(chatReq.messages?.[chatReq.messages.length - 1]?.content ?? "").slice(0, 40)}"`
       );
 
       lastPrompt = {
         at: new Date().toISOString(),
-        rendered: renderForReview(chatReq, memory, SYSTEM_PROMPT),
+        rendered: renderForReview(chatReq, SYSTEM_PROMPT),
       };
 
       res.writeHead(200, {
@@ -296,7 +312,7 @@ const server = createServer(async (req, res) => {
       let firstByteMs: number | null = null;
       let thinkingChars = 0;
       try {
-        for await (const chunk of streamChat(chatReq, memory, SYSTEM_PROMPT, {
+        for await (const chunk of streamChat(chatReq, SYSTEM_PROMPT, {
           signal: ac.signal,
           model: useModel,
         })) {
@@ -309,11 +325,21 @@ const server = createServer(async (req, res) => {
           full += chunk.text;
           send("delta", { text: chunk.text });
         }
-        const { text, suggestions } = stripMemoryBlocks(full);
-        if (suggestions.length) send("memory_suggestion", { suggestions });
+        // <memory> 那套已拆；保留剥离只是防御（模型偶尔还会吐旧格式）
+        const { text } = stripMemoryBlocks(full);
+        // ★ 落库：助手这条。空回复不写。
+        if (text.trim() && chatReq.sessionId) {
+          appendMessage({
+            sessionId: chatReq.sessionId,
+            problemId: chatReq.problem?.id ?? null,
+            slug: chatReq.problem?.slug,
+            role: "assistant",
+            content: text,
+          });
+        }
         log(
           `[chat] 完成 首字节=${firstByteMs ?? "?"}ms 总耗时=${Date.now() - t0}ms ` +
-            `思考=${thinkingChars}字符 正文=${text.length}字符 记忆建议=${suggestions.length}条`
+            `思考=${thinkingChars}字符 正文=${text.length}字符`
         );
         send("done", {
           chars: text.length,
@@ -337,13 +363,13 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  const m = memoryStatus();
+  const m = dbStatus();
   console.log(`\n  better-leetcode 后端已启动`);
   console.log(`  → http://127.0.0.1:${PORT}`);
   console.log(`  默认模型 ${defaultModel() || "（未配置）"}`);
   console.log(`  可选模型 ${allowedModels().join(", ") || "（未配置）"}`);
   console.log(`  API key  ${process.env.LLM_API_KEY ? "已配置" : "⚠️  未配置 —— /chat 会失败"}`);
-  console.log(`  记忆库   ${m.ok ? m.path : `⚠️  不可用：${m.error}`}`);
+  console.log(`  对话库   ${m.ok ? m.path : `⚠️  不可用：${m.error}`}`);
   console.log(`  日志文件 ${LOG_FILE}`);
   console.log(`\n  调试: curl http://127.0.0.1:${PORT}/diag      ← 看扩展汇报了什么`);
   console.log(`        curl http://127.0.0.1:${PORT}/debug/last-prompt\n`);

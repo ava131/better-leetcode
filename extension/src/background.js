@@ -37,14 +37,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse(await r.json());
         return;
       }
-      if (msg.type === "confirmMemory") {
-        const r = await backend("/memory/confirm", {
-          method: "POST",
-          body: JSON.stringify(msg.payload),
-        });
-        sendResponse(await r.json());
-        return;
-      }
       if (msg.type === "recordSubmission") {
         await backend("/submission", { method: "POST", body: JSON.stringify(msg.payload) });
         sendResponse({ ok: true });
@@ -53,6 +45,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg.type === "diag") {
         await backend("/diag", { method: "POST", body: JSON.stringify(msg.payload) });
         sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === "historyList") {
+        const slug = encodeURIComponent(msg.payload?.slug || "");
+        const r = await backend(`/history/list?slug=${slug}`);
+        sendResponse(await r.json());
+        return;
+      }
+      if (msg.type === "historySession") {
+        const id = encodeURIComponent(msg.payload?.id || "");
+        const r = await backend(`/history/session?id=${id}`);
+        sendResponse(await r.json());
+        return;
+      }
+      if (msg.type === "historySearch") {
+        const slug = encodeURIComponent(msg.payload?.slug || "");
+        const q = encodeURIComponent(msg.payload?.q || "");
+        const r = await backend(`/history/search?slug=${slug}&q=${q}`);
+        sendResponse(await r.json());
         return;
       }
       if (msg.type === "overview") {
@@ -135,8 +146,6 @@ chrome.runtime.onConnect.addListener((port) => {
 
           if (event === "delta") port.postMessage({ type: "delta", text: payload.text });
           else if (event === "thinking") port.postMessage({ type: "thinking", text: payload.text });
-          else if (event === "memory_suggestion")
-            port.postMessage({ type: "memory_suggestion", suggestions: payload.suggestions });
           else if (event === "done") {
             doneSent = true;
             port.postMessage({ type: "done", ...payload });

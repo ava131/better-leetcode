@@ -84,14 +84,12 @@ console.log("=== 1) 正常一轮：done 只能有一个 ===");
     sseOf([
       { event: "thinking", data: { text: "想…" } },
       { event: "delta", data: { text: "正文" } },
-      { event: "memory_suggestion", data: { suggestions: [] } },
       { event: "done", data: { chars: 2, model: "m" } },
     ])
   );
   const dones = sent.filter((m) => m.type === "done");
   check("delta 转发", sent.some((m) => m.type === "delta" && m.text === "正文"));
   check("thinking 转发", sent.some((m) => m.type === "thinking"));
-  check("memory_suggestion 转发", sent.some((m) => m.type === "memory_suggestion"));
   check("done 只发一次", dones.length === 1, `发了 ${dones.length} 次`);
   check("没有多送兜底 done", !dones.some((d) => d.fallback), JSON.stringify(dones));
 }

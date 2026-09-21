@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.6.2";
+  const VER = "0.7.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -68,6 +68,15 @@
     model: "",
     /** 后端给出的可选模型列表 */
     models: [],
+    /** 当前标签页："chat" | "history" */
+    tab: "chat",
+    /** 这道题的历史会话列表 */
+    sessions: [],
+    /** 打开的历史会话（只读回看） */
+    openSession: null,
+    /** 历史搜索关键词与结果 */
+    historyQuery: "",
+    searchResults: null,
   };
 
   const SUGGESTIONS_NEW = ["这题有几种解法？", "思路是什么？", "帮我分析下这题的坑"];
@@ -150,7 +159,6 @@
   .msg.assistant { background: #1f2937; }
   .input { background: #111827; border-color: #374151; color: #f3f4f6; }
   .chip { background: #374151; border-color: #4b5563; color: #e5e7eb; }
-  .card { background: #111827; border-color: #4b5563; }
   code, pre { background: #111827 !important; }
 }
 .wrap.collapsed { display: none; }
@@ -206,7 +214,52 @@
 .status.blue .dot   { background: #3b82f6; animation: blpulse 1.1s ease-in-out infinite; }
 @keyframes blpulse { 0%,100% { opacity: 1; } 50% { opacity: .28; } }
 
+/* 标签栏：只有存在历史时才显示 */
+.tabs { display: flex; gap: 2px; padding: 0 8px; border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb; flex: 0 0 auto; }
+.tabs[hidden] { display: none; }
+.tabs button { border: none; background: transparent; padding: 6px 10px; font-size: 12px;
+  color: #6b7280; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button.on { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+.tabs .badge { display: inline-block; min-width: 15px; padding: 0 4px; border-radius: 8px;
+  background: #e5e7eb; color: #6b7280; font-size: 10px; line-height: 15px; text-align: center; }
+.tabs button.on .badge { background: #dbeafe; color: #1d4ed8; }
+
+/* 历史视图 */
+.hist { flex: 1 1 auto; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.hist[hidden] { display: none; }
+.hist .search { width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 6px;
+  padding: 5px 8px; font-size: 12px; font-family: inherit; outline: none; margin-bottom: 2px; }
+.hist .search:focus { border-color: #2563eb; }
+.hist .row { border: 1px solid #e5e7eb; border-radius: 7px; padding: 7px 9px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; }
+.hist .row:hover { background: #f9fafb; border-color: #c7d2fe; }
+.hist .row .info { flex: 1; min-width: 0; }
+.hist .row .when { font-size: 11px; color: #6b7280; }
+.hist .row .head { font-size: 12px; color: #111827; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; margin-top: 1px; }
+.hist .row .go { font-size: 11px; color: #2563eb; flex: 0 0 auto; }
+.hist .empty { color: #9ca3af; font-size: 12px; text-align: center; padding: 18px 0; }
+.hist .bar { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.hist .bar button { border: none; background: transparent; color: #2563eb; font-size: 12px;
+  cursor: pointer; padding: 2px 0; }
+.hist .bar .t { flex: 1; font-size: 11px; color: #6b7280; text-align: right; }
+.hist details { margin: 4px 0 2px; }
+.hist details summary { font-size: 11px; color: #6b7280; cursor: pointer; }
+.hist details pre { background: #0f172a; color: #e2e8f0; padding: 6px 8px; border-radius: 5px;
+  overflow-x: auto; font-size: 11px; margin: 4px 0 0; font-family: ui-monospace, Menlo, monospace; }
+.hist .continue { margin: 10px 0 4px; padding: 6px; border: 1px solid #c7d2fe; border-radius: 7px;
+  background: #f5f7ff; color: #4338ca; font-size: 12px; cursor: pointer; }
+.hist .continue:hover { background: #eef2ff; }
+@media (prefers-color-scheme: dark) {
+  .tabs { background: #111827; border-color: #374151; }
+  .hist .row { border-color: #374151; } .hist .row:hover { background: #111827; }
+  .hist .row .head { color: #f3f4f6; }
+  .hist .search { background: #111827; border-color: #374151; color: #f3f4f6; }
+}
+
 .body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.body[hidden] { display: none; }
 .body:empty::after { content: "问点什么。题干和代码已经在我手里了。"; color: #9ca3af; font-size: 12px; }
 
 .msg { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; }
@@ -262,15 +315,6 @@
   padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .chip:hover { background: #f3f4f6; }
 
-.card { border: 1px solid #c7d2fe; background: #f5f7ff; border-radius: 8px; padding: 9px 10px;
-  font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
-.card .k { font-weight: 600; color: #4338ca; }
-.card .d { color: #4b5563; }
-.card .btns { display: flex; gap: 6px; }
-.card button { border-radius: 5px; padding: 3px 10px; font-size: 12px; cursor: pointer; border: 1px solid; }
-.card .yes { background: #4338ca; border-color: #4338ca; color: #fff; }
-.card .no { background: transparent; border-color: #d1d5db; color: #6b7280; }
-
 .ft { display: flex; gap: 6px; padding: 8px 12px 10px; border-top: 1px solid #e5e7eb; flex: 0 0 auto; }
 .input { flex: 1; resize: none; border: 1px solid #d1d5db; border-radius: 7px; padding: 7px 9px;
   font-size: 13px; font-family: inherit; max-height: 120px; min-height: 34px; outline: none; }
@@ -278,9 +322,15 @@
 .send { border: none; background: #2563eb; color: #fff; border-radius: 7px; padding: 0 14px;
   cursor: pointer; font-size: 13px; }
 .send:disabled { background: #9ca3af; cursor: default; }
+/* 流式输出中，发送按钮变成「停止」 */
+.send.stop { background: #dc2626; }
+.send.stop:hover { background: #b91c1c; }
+.msg.assistant .note { margin-top: 7px; padding-top: 6px; border-top: 1px dashed #d1d5db;
+  color: #9ca3af; font-size: 11px; }
+@media (prefers-color-scheme: dark) { .msg.assistant .note { border-top-color: #4b5563; } }
 `;
 
-  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl;
+  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl;
 
   /** 小球的形象图。拿不到 URL 就退回文字标（测试环境里 chrome.runtime 可能是 stub） */
   let PET = "";
@@ -316,7 +366,12 @@
         <button data-act="collapse" title="收起">—</button>
       </div>
       <div class="status gray"></div>
+      <div class="tabs" hidden>
+        <button data-tab="chat" class="on">对话</button>
+        <button data-tab="history">历史 <span class="badge">0</span></button>
+      </div>
       <div class="body"></div>
+      <div class="hist" hidden></div>
       <div class="chips"></div>
       <div class="ft">
         <textarea class="input" rows="1" placeholder="问点什么…  Enter 发送 · Shift+Enter 换行"></textarea>
@@ -335,6 +390,11 @@
 
     document.documentElement.appendChild(host);
 
+    tabsEl = root.querySelector(".tabs");
+    histEl = root.querySelector(".hist");
+    for (const b of tabsEl.querySelectorAll("button")) {
+      b.onclick = () => switchTab(b.dataset.tab);
+    }
     statusEl = root.querySelector(".status");
     bodyEl = root.querySelector(".body");
     chipsEl = root.querySelector(".chips");
@@ -717,6 +777,236 @@
     bodyEl.scrollTop = bodyEl.scrollHeight;
   }
 
+  // ───────────────────────── 历史 ─────────────────────────
+
+  function switchTab(tab) {
+    S.tab = tab;
+    if (bodyEl) bodyEl.hidden = tab !== "chat";
+    if (histEl) histEl.hidden = tab !== "history";
+    if (chipsEl) chipsEl.hidden = tab !== "chat";
+    renderTabs();
+    if (tab === "history") renderHistory();
+  }
+
+  /** 有历史才显示「历史」标签；没有就跟以前一模一样 */
+  function renderTabs() {
+    if (!tabsEl) return;
+    const n = S.sessions.length;
+    tabsEl.hidden = n === 0;
+    const badge = tabsEl.querySelector(".badge");
+    if (badge) badge.textContent = String(n);
+    for (const b of tabsEl.querySelectorAll("button")) {
+      b.classList.toggle("on", b.dataset.tab === S.tab);
+    }
+  }
+
+  async function loadSessions() {
+    const slug = S.problem?.slug || S.slug;
+    if (!slug) return;
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "historyList", payload: { slug } });
+      S.sessions = Array.isArray(r?.sessions) ? r.sessions : [];
+    } catch {
+      S.sessions = [];
+    }
+    if (!S.sessions.length && S.tab === "history") switchTab("chat");
+    renderTabs();
+    if (S.tab === "history") renderHistory();
+  }
+
+  function fmtTime(iso) {
+    try {
+      const d = new Date(iso);
+      const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      return d.toDateString() === new Date().toDateString()
+        ? `今天 ${hm}`
+        : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+    } catch {
+      return String(iso || "");
+    }
+  }
+
+  /** 快照是 "hash\0json"，取出 json 部分 */
+  function parseSnapshot(raw) {
+    try {
+      return JSON.parse(String(raw).split("\u0000")[1] || "null");
+    } catch {
+      return null;
+    }
+  }
+
+  function snapshotDetails(raw) {
+    const d = document.createElement("details");
+    const snap = parseSnapshot(raw);
+    const sum = document.createElement("summary");
+    const bits = [snap?.verdict, snap?.lang].filter(Boolean);
+    sum.textContent = "当时的代码" + (bits.length ? ` · ${bits.join(" · ")}` : "");
+    d.appendChild(sum);
+    const pre = document.createElement("pre");
+    pre.textContent = snap?.code || "（没存代码）";
+    d.appendChild(pre);
+    return d;
+  }
+
+  async function openSession(id) {
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "historySession", payload: { id } });
+      S.openSession = { id, started_at: "", messages: Array.isArray(r?.messages) ? r.messages : [] };
+    } catch {
+      S.openSession = { id, started_at: "", messages: [] };
+    }
+    const meta = S.sessions.find((x) => x.id === id);
+    if (meta) S.openSession.started_at = meta.started_at;
+    renderHistory();
+  }
+
+  async function searchHistory(q) {
+    S.historyQuery = q;
+    if (!q.trim()) {
+      S.searchResults = null;
+      renderHistory();
+      return;
+    }
+    try {
+      const r = await chrome.runtime.sendMessage({
+        type: "historySearch",
+        payload: { slug: S.problem?.slug || S.slug, q },
+      });
+      S.searchResults = Array.isArray(r?.results) ? r.results : [];
+    } catch {
+      S.searchResults = [];
+    }
+    renderHistory();
+  }
+
+  /** 把这段历史载入当前对话，接着聊（后续消息写进同一个会话） */
+  function continueSession() {
+    if (!S.openSession) return;
+    S.messages = S.openSession.messages
+      .filter((m) => m.role !== "marker")
+      .map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.content }));
+    S._sid = S.openSession.id;
+    S.openSession = null;
+    renderMessages();
+    switchTab("chat");
+    saveSession();
+    say("system", "已载入这段历史，可以接着问");
+  }
+
+  function renderHistory() {
+    if (!histEl) return;
+    histEl.innerHTML = "";
+
+    // 打开某个会话 → 只读回看
+    if (S.openSession) {
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      const back = document.createElement("button");
+      back.textContent = "‹ 返回列表";
+      back.onclick = () => {
+        S.openSession = null;
+        renderHistory();
+      };
+      const t = document.createElement("span");
+      t.className = "t";
+      t.textContent = fmtTime(S.openSession.started_at);
+      bar.append(back, t);
+      histEl.appendChild(bar);
+
+      for (const m of S.openSession.messages) {
+        if (m.role === "marker") {
+          const d = document.createElement("div");
+          d.className = "msg system";
+          d.textContent = m.content;
+          histEl.appendChild(d);
+          continue;
+        }
+        const d = document.createElement("div");
+        d.className = "msg " + (m.role === "user" ? "user" : "assistant");
+        if (m.role === "user") d.textContent = m.content;
+        else d.innerHTML = md(m.content);
+        histEl.appendChild(d);
+        if (m.snapshot) histEl.appendChild(snapshotDetails(m.snapshot));
+      }
+      if (S.openSession.messages.length) {
+        const btn = document.createElement("button");
+        btn.className = "continue";
+        btn.textContent = "继续这条对话";
+        btn.onclick = continueSession;
+        histEl.appendChild(btn);
+      }
+      return;
+    }
+
+    // 搜索框
+    const box = document.createElement("input");
+    box.className = "search";
+    box.placeholder = "搜这道题的对话…";
+    box.value = S.historyQuery;
+    let searchTimer = null;
+    box.oninput = () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => searchHistory(box.value), 350);
+    };
+    histEl.appendChild(box);
+
+    // 搜索结果
+    if (S.searchResults) {
+      if (!S.searchResults.length) {
+        const e = document.createElement("div");
+        e.className = "empty";
+        e.textContent = "没搜到";
+        histEl.appendChild(e);
+        return;
+      }
+      for (const r of S.searchResults) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const info = document.createElement("div");
+        info.className = "info";
+        const w = document.createElement("div");
+        w.className = "when";
+        w.textContent = `${r.role === "user" ? "你" : "AI"} · ${fmtTime(r.created_at)}`;
+        const h = document.createElement("div");
+        h.className = "head";
+        h.textContent = r.content.slice(0, 70);
+        info.append(w, h);
+        row.appendChild(info);
+        row.onclick = () => openSession(r.session_id);
+        histEl.appendChild(row);
+      }
+      return;
+    }
+
+    // 会话列表
+    if (!S.sessions.length) {
+      const e = document.createElement("div");
+      e.className = "empty";
+      e.textContent = "还没有历史对话";
+      histEl.appendChild(e);
+      return;
+    }
+    for (const sess of S.sessions) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const info = document.createElement("div");
+      info.className = "info";
+      const w = document.createElement("div");
+      w.className = "when";
+      w.textContent = `${fmtTime(sess.last_at)} · ${sess.msg_count} 条`;
+      const h = document.createElement("div");
+      h.className = "head";
+      h.textContent = sess.title || "（无标题）";
+      info.append(w, h);
+      const go = document.createElement("span");
+      go.className = "go";
+      go.textContent = "›";
+      row.append(info, go);
+      row.onclick = () => openSession(sess.id);
+      histEl.appendChild(row);
+    }
+  }
+
   function appendMessage(role, content) {
     S.messages.push({ role, content });
     const d = document.createElement("div");
@@ -736,7 +1026,9 @@
     // 必须给即时反馈，否则用户盯着空白面板。
     const think = document.createElement("div");
     think.className = "thinking";
-    think.innerHTML = `<span class="spinner"></span><span class="tlabel">思考中…</span><span class="tcount"></span>`;
+    // 一开始是「连接中…」而不是「思考中…」：
+    // 后端连不上和模型在想是两回事，不能都显示"思考中"让人无限等。
+    think.innerHTML = `<span class="spinner"></span><span class="tlabel">连接中…</span><span class="tcount"></span>`;
     d.appendChild(think);
     const content = document.createElement("div");
     content.className = "content";
@@ -748,6 +1040,11 @@
     let gotContent = false;
 
     return {
+      /** 收到第一个字节 —— 从"连接中"切到"思考中" */
+      connected() {
+        const l = think.querySelector(".tlabel");
+        if (l && l.textContent === "连接中…") l.textContent = "思考中…";
+      },
       think(t) {
         thinkChars += t.length;
         const c = think.querySelector(".tcount");
@@ -771,10 +1068,29 @@
         bodyEl.scrollTop = bodyEl.scrollHeight;
         return shown; // ← 返回剥过的，存进 S.messages 的也是剥过的
       },
+      /** 在正文后面加一行小字（例如"已停止"），不影响已经流出来的内容 */
+      note(text) {
+        think.remove();
+        if (buf.trim()) content.innerHTML = md(stripMemory(buf));
+        const n = document.createElement("div");
+        n.className = "note";
+        n.textContent = text;
+        d.appendChild(n);
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      },
       fail(msg) {
         think.remove();
-        d.className = "msg err";
-        d.textContent = msg;
+        // 已经流出来一部分的话，别把它抹掉 —— 那部分对用户是有用的
+        if (buf.trim()) {
+          content.innerHTML = md(stripMemory(buf));
+          const n = document.createElement("div");
+          n.className = "note";
+          n.textContent = msg;
+          d.appendChild(n);
+        } else {
+          d.className = "msg err";
+          d.textContent = msg;
+        }
       },
     };
   }
@@ -798,38 +1114,6 @@
       };
       chipsEl.appendChild(b);
     }
-  }
-
-  function renderMemoryCards(suggestions) {
-    for (const s of suggestions) {
-      const d = document.createElement("div");
-      d.className = "card";
-      const isStuck = s.kind === "stuck_point";
-      d.innerHTML = `
-        <div class="k">💡 记下来？</div>
-        <div class="d">${isStuck ? "卡点" : "解法"}：${esc(isStuck ? s.desc : s.name)}</div>
-        ${s.insight ? `<div class="d">认知：${esc(s.insight)}</div>` : ""}
-        ${!isStuck && s.time ? `<div class="d">${esc(s.time)}${s.space ? " / " + esc(s.space) : ""}</div>` : ""}
-        <div class="btns"><button class="yes">记下来</button><button class="no">不用</button></div>`;
-      const remove = () => d.remove();
-      d.querySelector(".yes").onclick = async () => {
-        try {
-          const r = await chrome.runtime.sendMessage({
-            type: "confirmMemory",
-            payload: { slug: S.problem?.slug, problem: S.problem, suggestions: [s] },
-          });
-          d.querySelector(".btns").innerHTML = `<span class="d">${
-            r?.results?.[0]?.ok ? "✓ 已记录" : "✗ " + (r?.results?.[0]?.message || "写入失败")
-          }</span>`;
-          setTimeout(remove, 1200);
-        } catch (e) {
-          d.querySelector(".btns").innerHTML = `<span class="d">✗ ${esc(e.message)}</span>`;
-        }
-      };
-      d.querySelector(".no").onclick = remove;
-      bodyEl.appendChild(d);
-    }
-    bodyEl.scrollTop = bodyEl.scrollHeight;
   }
 
   function say(role, text) {
@@ -869,7 +1153,30 @@
     postToSelf({ __bl: TAG, nonce: readNonce(), type: "hello" });
   }
 
+  /** 发送按钮在「发送」和「停止」两种形态间切换 */
+  function setSendMode(mode) {
+    if (!sendEl) return;
+    if (mode === "stop") {
+      sendEl.textContent = "停止";
+      sendEl.classList.add("stop");
+      sendEl.disabled = false;
+      sendEl.onclick = () => abortCurrent && abortCurrent();
+    } else {
+      sendEl.textContent = "发送";
+      sendEl.classList.remove("stop");
+      sendEl.disabled = false;
+      sendEl.onclick = send;
+    }
+  }
+
+  /** 等第一个字节最多多久；流式过程中两次数据之间最多隔多久 */
+  const CONNECT_TIMEOUT_MS = 25000;
+  const GAP_TIMEOUT_MS = 60000;
+
   let sending = false;
+  /** 当前这轮的中止函数，给「停止」按钮用 */
+  let abortCurrent = null;
+
   async function send() {
     const text = inputEl.value.trim();
     if (!text || sending) return;
@@ -892,7 +1199,7 @@
     saveSession(); // 先存一次：万一回复途中刷新，用户这句不至于丢
 
     sending = true;
-    sendEl.disabled = true;
+    setSendMode("stop");
     const bubble = beginStreamBubble();
 
     const payload = {
@@ -911,56 +1218,100 @@
       messages: S.messages.slice(0, -1).concat([{ role: "user", content: text }]),
     };
 
+    let port = null;
+    let settled = false; // done / error / 超时 / 断开 / 手动停止，只认第一个
+    let gotFirst = false;
+    let connectTimer = null;
+    let gapTimer = null;
+
+    const clearTimers = () => {
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      if (gapTimer) { clearTimeout(gapTimer); gapTimer = null; }
+    };
+
+    /**
+     * 收尾。不管走哪条路都必须复位 UI ——
+     * 否则 sending 卡住就再也发不出去，只剩"思考中…"陪着你。
+     */
+    const settle = (msg, opts = {}) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      abortCurrent = null;
+      sending = false;
+      setSendMode("send");
+      if (msg) {
+        if (opts.keepContent) bubble.note(msg);
+        else bubble.fail(msg);
+      }
+      try { port && port.disconnect(); } catch {}
+    };
+
+    /** 用户主动点「停止」：已经流出来的正文要留下 */
+    abortCurrent = () => {
+      if (settled) return;
+      const partial = bubble.finish();
+      if (partial.trim()) S.messages.push({ role: "assistant", content: partial });
+      saveSession();
+      settle("⏹ 已停止", { keepContent: true });
+      inputEl.focus();
+    };
+
+    /** 流式途中长时间没有新内容 → 大概率是上游挂了 */
+    const armGap = () => {
+      if (gapTimer) clearTimeout(gapTimer);
+      gapTimer = setTimeout(() => {
+        settle(`✗ 超过 ${GAP_TIMEOUT_MS / 1000} 秒没有新内容，已中止（可以重发）`);
+      }, GAP_TIMEOUT_MS);
+    };
+
+    // 连不上 / 后端收到了但迟迟不吐字
+    connectTimer = setTimeout(() => {
+      settle(
+        `✗ 等了 ${CONNECT_TIMEOUT_MS / 1000} 秒还没有响应 —— 确认后端在跑（看 server 那个窗口），或点发送重试`
+      );
+    }, CONNECT_TIMEOUT_MS);
+
     try {
-      const port = chrome.runtime.connect({ name: "chat" });
-      let full = "";
-      let settled = false; // done / error / 端口断开，只认第一个
+      port = chrome.runtime.connect({ name: "chat" });
 
-      /** 无论走哪条路结束，都要把 UI 复位 —— 否则 sending 卡住就再也发不出去了 */
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        sending = false;
-        sendEl.disabled = false;
-      };
-
-      // ★ MV3 的 service worker 会被回收，端口可能毫无征兆地断掉。
-      //   不监听 onDisconnect 的话 sending 会永久为 true。
+      // MV3 的 service worker 会被回收，端口可能毫无征兆地断掉
       port.onDisconnect.addListener(() => {
-        if (!settled) {
-          bubble.fail("✗ 连接中断（后端或扩展的后台被回收了），请重试");
-          finish();
-        }
+        settle("✗ 连接中断（后端或扩展后台被回收了），可以重试");
       });
 
       port.onMessage.addListener((m) => {
+        if (settled) return;
+        // 收到第一个字节就撤掉"连接超时"，改成盯"断流超时"
+        if (m.type === "thinking" || m.type === "delta") {
+          if (!gotFirst) {
+            gotFirst = true;
+            if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+          }
+          armGap();
+        }
         if (m.type === "thinking") {
+          bubble.connected();
           bubble.think(m.text);
         } else if (m.type === "delta") {
-          full += m.text;
+          bubble.connected();
           bubble.push(m.text);
-        } else if (m.type === "memory_suggestion") {
-          renderMemoryCards(m.suggestions);
         } else if (m.type === "done") {
-          if (settled) return; // 幂等：万一收到两个 done，只认第一个
           const rendered = bubble.finish();
-          // 空回复不入库（例如只有思考没有正文），否则会话里会多一条空消息
+          // 空回复不入库（例如只有思考没有正文）
           if (rendered.trim()) S.messages.push({ role: "assistant", content: rendered });
           saveSession();
-          finish();
-          port.disconnect();
+          settle("");
+          loadSessions(); // 首轮问完，历史标签就该出现了
           inputEl.focus();
         } else if (m.type === "error") {
-          if (settled) return;
-          bubble.fail("✗ " + m.message);
-          finish();
-          port.disconnect();
+          settle("✗ " + m.message);
         }
       });
+
       port.postMessage({ type: "chat", payload });
     } catch (e) {
-      bubble.fail("✗ " + e.message);
-      finish();
+      settle("✗ " + e.message);
     }
   }
 
@@ -996,6 +1347,7 @@
           content: p.content,
         };
         updateAll();
+        loadSessions(); // ★ 必须在这里：boot 时 slug 还没填上，那时调用会直接返回
         break;
       }
       case "code": {
@@ -1240,6 +1592,9 @@
 
     // 恢复上次的会话（题面/代码/判题结果/对话）。storage.session 是纯内存的，
     // 只为了挺过页面刷新，不落盘。
+    // 注意：这里 slug 可能还是空的（题面由拦截器稍后送来），
+    // 真正生效的是 problem 消息处理里那次 loadSessions()
+    loadSessions();
     const restored = await restoreSession();
     if (restored) {
       updateAll();

@@ -8,7 +8,7 @@
  *  - 记忆只注入当前题，且为空时不产生空标签
  */
 
-import type { ChatRequest, Memory } from "./types.ts";
+import type { ChatRequest } from "./types.ts";
 
 /** 失败用例输入超过这个长度就截断（力扣隐藏用例可能上万字符） */
 const TESTCASE_MAX = 2000;
@@ -22,7 +22,7 @@ function truncate(s: string, max = TESTCASE_MAX): string {
   return s.slice(0, max) + `\n…（已截断，原长 ${s.length} 字符）`;
 }
 
-export function buildContextBlock(req: ChatRequest, memory?: Memory | null): string {
+export function buildContextBlock(req: ChatRequest): string {
   const parts: string[] = [];
 
   // ---- 题干 ----
@@ -138,56 +138,15 @@ export function buildContextBlock(req: ChatRequest, memory?: Memory | null): str
     );
   }
 
-  // ---- 记忆 ----
-  if (memory && (memory.stuckPoints.length || memory.approaches.length)) {
-    const inner: string[] = [];
-
-    if (memory.stuckPoints.length) {
-      inner.push(`<stuck_points>`);
-      for (const s of memory.stuckPoints) {
-        inner.push(
-          `  <point count="${s.count}">${xmlEscape(s.desc)}` +
-            (s.insight ? `\n    <insight>${xmlEscape(s.insight)}</insight>` : "") +
-            `\n  </point>`
-        );
-      }
-      inner.push(`</stuck_points>`);
-    }
-
-    if (memory.approaches.length) {
-      inner.push(`<approaches>`);
-      for (const a of memory.approaches) {
-        const cx = [a.time, a.space].filter(Boolean).join(" / ");
-        inner.push(
-          `  <approach mastered="${a.mastered ? "true" : "false"}">${xmlEscape(a.name)}` +
-            (cx ? ` (${xmlEscape(cx)})` : "") +
-            (a.note ? `\n    <note>${xmlEscape(a.note)}</note>` : "") +
-            `\n  </approach>`
-        );
-      }
-      inner.push(`</approaches>`);
-    }
-
-    parts.push(
-      [
-        `<memory problem="${xmlEscape(p.title)}">`,
-        `<note>这是用户在这道题上的历史记录。mastered="false" 的解法是他还没掌握的。</note>`,
-        ...inner,
-        `</memory>`,
-      ].join("\n")
-    );
-  }
-
   return `<context>\n${parts.join("\n\n")}\n</context>`;
 }
 
 /** 组装最终发给模型的消息数组 */
 export function buildMessages(
   req: ChatRequest,
-  memory: Memory | null | undefined,
   systemPrompt: string
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
-  const contextBlock = buildContextBlock(req, memory);
+  const contextBlock = buildContextBlock(req);
 
   // 对话历史里若有 system 标记（如提交分隔），保持 system 角色
   const history = (req.messages ?? []).filter((m) => m.role !== "system" || m.content.startsWith("────"));
@@ -199,12 +158,8 @@ export function buildMessages(
 }
 
 /** 把组装结果渲染成便于人读的文本（--dry-run 用） */
-export function renderForReview(
-  req: ChatRequest,
-  memory: Memory | null | undefined,
-  systemPrompt: string
-): string {
-  const msgs = buildMessages(req, memory, systemPrompt);
+export function renderForReview(req: ChatRequest, systemPrompt: string): string {
+  const msgs = buildMessages(req, systemPrompt);
   const out: string[] = [];
   out.push("╔" + "═".repeat(78) + "╗");
   out.push("║ " + "MESSAGES（实际发给模型的完整内容）".padEnd(76) + " ║");

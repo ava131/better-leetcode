@@ -15,7 +15,6 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildMessages, renderForReview } from "./context.ts";
 import { loadEnv, streamChat, stripMemoryBlocks } from "./llm.ts";
-import { getMemory } from "./memory.ts";
 import { htmlToMarkdown } from "./html.ts";
 import type { ChatRequest } from "./types.ts";
 
@@ -26,11 +25,10 @@ loadEnv(resolve(PROJECT_ROOT, ".env"));
 
 const argv = process.argv.slice(2);
 const dryRun = argv.includes("--dry-run");
-const noMemory = argv.includes("--no-memory");
 const fileArg = argv.find((a) => !a.startsWith("--"));
 
 if (!fileArg) {
-  console.error("用法: node src/cli.ts [--dry-run] [--no-memory] <fixture.json>");
+  console.error("用法: node src/cli.ts [--dry-run] <fixture.json>");
   process.exit(1);
 }
 
@@ -43,12 +41,11 @@ if (req.problem?.content && /<[a-z][\s\S]*>/i.test(req.problem.content)) {
 }
 
 const systemPrompt = readFileSync(resolve(HERE, "prompts/system.md"), "utf8");
-const memory = noMemory ? null : getMemory(req.problem.slug);
 
 if (dryRun) {
-  console.log(renderForReview(req, memory, systemPrompt));
+  console.log(renderForReview(req, systemPrompt));
 
-  const msgs = buildMessages(req, memory, systemPrompt);
+  const msgs = buildMessages(req, systemPrompt);
   const total = msgs.reduce((a, m) => a + m.content.length, 0);
   console.log("\n" + "─".repeat(80));
   console.log("统计：");
@@ -56,7 +53,6 @@ if (dryRun) {
   console.log(`  总字符数        ${total}   （粗估 ≈ ${Math.round(total / 3)}~${Math.round(total / 1.5)} tokens）`);
   console.log(`  题干字符数      ${req.problem.content?.length ?? 0}`);
   console.log(`  代码字符数      ${req.code?.length ?? 0}`);
-  console.log(`  记忆              ${memory ? `卡点 ${memory.stuckPoints.length} 条 / 解法 ${memory.approaches.length} 条` : "（无）"}`);
   console.log("─".repeat(80));
   process.exit(0);
 }
@@ -75,7 +71,7 @@ let thinking = 0;
 let t0 = Date.now();
 let firstByte: number | null = null;
 try {
-  for await (const chunk of streamChat(req, memory, systemPrompt)) {
+  for await (const chunk of streamChat(req, systemPrompt)) {
     if (firstByte === null) firstByte = Date.now() - t0;
     if (chunk.kind === "thinking") {
       if (thinking === 0) process.stderr.write("\n[思考中] ");
@@ -92,12 +88,9 @@ try {
   process.exit(1);
 }
 
-const { text, suggestions } = stripMemoryBlocks(full);
+// 防御性剥离：模型偶尔还会吐旧的 <memory> 格式
+const { text } = stripMemoryBlocks(full);
 console.log("\n" + "─".repeat(80));
-if (suggestions.length) {
-  console.log("记忆建议（会让用户确认才入库）：");
-  for (const s of suggestions) console.log("  " + JSON.stringify(s));
-}
 console.log(
   `\n（正文 ${text.length} 字符；首字节 ${firstByte ?? "?"}ms；` +
     `思考 ${thinking} 字符；总耗时 ${Date.now() - t0}ms）`

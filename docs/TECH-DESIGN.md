@@ -445,93 +445,41 @@ class Solution:
 ### 5.1 SQLite schema
 
 ```sql
-CREATE TABLE problems (
-  id           INTEGER PRIMARY KEY,      -- 力扣 questionId
-  slug         TEXT NOT NULL UNIQUE,
-  title        TEXT NOT NULL,
-  difficulty   TEXT,
-  tags         TEXT,                     -- JSON array
-  updated_at   TEXT NOT NULL
-);
+-- 题目（tags 要留着：将来「按 tag 聚合导师摘要」要用）
+problems(id, slug, title, difficulty, tags, updated_at)
 
--- 解法掌握度：这题有几种解法，我掌握了几种
-CREATE TABLE approaches (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  problem_id      INTEGER NOT NULL REFERENCES problems(id),
-  name            TEXT NOT NULL,         -- "排序+双指针"
-  time_complexity TEXT,
-  space_complexity TEXT,
-  mastered        INTEGER NOT NULL DEFAULT 0,   -- 0/1
-  evidence        TEXT,                  -- "2026-09-10 独立 AC"
-  note            TEXT,                  -- "知道有，没写过"
-  created_at      TEXT NOT NULL,
-  updated_at      TEXT NOT NULL,
-  UNIQUE(problem_id, name)
-);
+-- 一次「打开题目页」= 一个会话
+sessions(id TEXT PK, problem_id, slug, title, started_at, last_at)
 
--- 卡点
-CREATE TABLE stuck_points (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  problem_id  INTEGER NOT NULL REFERENCES problems(id),
-  description TEXT NOT NULL,             -- "去重时 while 的边界"
-  insight     TEXT,                      -- 认知层归因，可为空
-  count       INTEGER NOT NULL DEFAULT 1,
-  first_seen  TEXT NOT NULL,
-  last_seen   TEXT NOT NULL
-);
+-- 对话消息。**全量存**，但不存模型的思考过程
+messages(id, session_id, problem_id, role, content, snapshot, created_at)
+  role: user | assistant | marker
+  snapshot: JSON，当时的代码/判定/用例 —— **只在变化时才写**（去重，省 ~1.5KB/轮）
 
--- 提交记录（只存元数据，不存代码 —— 见 PRD FR-5）
-CREATE TABLE submissions (
-  id          INTEGER PRIMARY KEY,       -- 力扣 submission id
-  problem_id  INTEGER NOT NULL REFERENCES problems(id),
-  lang        TEXT,
-  verdict     TEXT,
-  passed      INTEGER,
-  total       INTEGER,
-  created_at  TEXT NOT NULL
-);
+submissions(id, problem_id, lang, verdict, passed, total, created_at)
 ```
 
-**没有对话表、没有代码表。** 存储量级：一道题几百字节，几百道题也就几百 KB。
+**检索用 `LIKE`，不用 FTS5**：实测 `unicode61` 分词器把连续中文当成一个 token，
+搜「边界」命中 0 条；`trigram` 要求 ≥3 字符。`LIKE` 对中英文一视同仁，
+也不会有 `unterminated string` 这类语法错误。实测体积 ~18MB/年，全表扫是毫秒级。
 
-### 5.2 写入流程：显式确认（硬约束）
+**旧库平滑升级**：全部 `CREATE TABLE IF NOT EXISTS`。老库里那两张
+（`approaches` / `stuck_points`）**不 DROP** —— 从旧库升上来时 DROP 不可逆，
+它们不再被读写，只是占一点地方。
 
-```
-LLM 回复里带 <memory>{...}</memory>
-  ↓
-后端剥离该段，正文不含它
-  ↓
-以 SSE `memory_suggestion` 事件下发
-  ↓
-侧边栏渲染成卡片
-  ↓
-用户点 [记下来] ──POST /memory/confirm──▶ 才写库
-用户点 [不用]   ──▶ 丢弃
-```
+### 5.2 写入时机
 
-**为什么这是硬约束**：自动归因会悄悄污染记忆，且用户不会发现。三个月后看到"我老在边界上错"，那可能是 AI 编的（PRD §9.2）。
+- **用户消息**：`/chat` 一进来就写。中途刷新/断线也不至于丢
+- **助手消息**：流结束、`stripMemoryBlocks` 之后写。空回复不写
+- `appendMessage` 会**自动建会话**（外键约束会让写入静默失败 = 丢消息）
+### 5.3 历史查询
 
-**副产品**：点确认这个动作本身就是复习。
-
-### 5.3 读取与注入
-
-| 场景 | 注入什么 |
+| 接口 | 作用 |
 |---|---|
-| 当前题有记忆 | 该题的 `stuck_points` + `approaches`（通常几十行，直接全塞） |
-| 当前题无记忆 | 不注入，prompt 里不带 `<memory>` 块 |
-| 用户问跨题问题 | 后端全量扫 `stuck_points` 聚合后注入汇总（几百条毫秒级） |
-
-**不需要向量检索、不需要 embedding。** 这个规模下 SQL 聚合足够。
-
-### 5.4 掌握度矩阵的填充
-
-| 触发 | 提议 |
-|---|---|
-| 提交 AC | 侧边栏提议："记下来：这题你用<某解法>独立过了？" → 确认后 `mastered=1` |
-| 对话里 AI 讲了新解法 | AI 附 `{"kind":"approach", ...}` 建议卡 |
-| 手动 | 侧边栏可手动增删改 |
-
-**判定规则客观**（PRD FR-7）：独立 AC = 会；看题解/提示才会 = 不算；知道但没写过 = 记"知道"。
+| `GET /history/list?slug=` | 某题的会话列表（按**最后一条消息 id** 排序，不按时间戳——毫秒精度会并列） |
+| `GET /history/session?id=` | 某个会话的全部消息 |
+| `GET /history/search?slug=&q=` | 在某题里搜（LIKE，`% _ \` 要转义） |
+| `GET /history/stats` | 总量统计 |
 
 ---
 
@@ -604,6 +552,11 @@ LLM 回复里带 <memory>{...}</memory>
 | **★34** | 力扣对 **Accepted 的提交也会返回 `outputDetail`**，但字段全是**空字符串**（不是 null）。只判断 `!= null` 会把空壳当失败用例，状态条显示 `用例 → / 期望` | 判断要 `!= null && trim() !== ""`。状态条文案也要区分「全部通过」和「没拿到用例」 |
 | **★35** | Node 的 **type-stripping 不支持 TS 的"参数属性"**（`constructor(public code: number)`）—— 那需要真正的转换，不是剥离，直接 `SyntaxError` | 写成显式赋值 `this.code = code`。用 Node 直跑 TS 时要注意这类"看着像类型、其实是语法"的写法 |
 | **★36** | 浏览器测试里 content.js 会**跑出多个面板**（`addScriptToEvaluateOnNewDocument` 在每个新 document 上都会跑，而真力扣加载过程会创建多个；**真实扩展一个 document 只注入一次**）。多个实例的文档级监听器互相干扰，UI 断言飘忽 | 这类断言不要做像素级判断，改成"任一面板满足"；真正需要确定性的覆盖放到 Node 单测（`extension/test/`）。**产品侧也做了防御**：失焦收起按 **id** 判断而不是 `path.includes(host)`，`build()` 会先移除已有面板 |
+| **★37** | **FTS5 对中文无效**：`unicode61` 把连续中文当成一个 token，搜「边界」在「注意闭区间的边界处理」里命中 **0** 条；`trigram` 又要求 ≥3 字符 | 这个规模直接用 `LIKE`（记得转义 `% _ \`）。中英文一视同仁，也没有特殊字符的语法错误 |
+| **★38** | `appendMessage` 撞外键会**静默丢消息**（只打一行日志）。而会话不存在是常态（客户端新建会话后第一条就发过来） | 写入前 `INSERT OR IGNORE` 建会话。而且自动建会话时**必须带上 slug**，否则会话挂到 `unknown` 下，列表里查不到 |
+| **★39** | 会话列表按 `last_at` 排序**会并列**（`toISOString()` 毫秒精度，测试里一次跑好几条） | 按"最后一条消息 id"排——单调递增，不会并列 |
+| **★40** | `<div class="tabs">` 上的 `hidden` 属性 vs `tabsEl.hidden = false`：**布局没问题，但我在测试里读错了面板**（见 ★36） | — |
+| **★41** | `Page.addScriptToEvaluateOnNewDocument` 会注入到**所有 frame**，页面里的 iframe 也会跑 content script | 测试工具 `evalInWorld` 已经按主 frame 过滤（见 §7 ★22） |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |

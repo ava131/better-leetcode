@@ -5,6 +5,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { buildMessages } from "./context.ts";
+import type { CodeRender } from "./code-version.ts";
 import type { ChatRequest, MemorySuggestion } from "./types.ts";
 
 export function loadEnv(path: string): void {
@@ -31,6 +32,14 @@ export interface StreamOptions {
   maxTokens?: number;
   /** 覆盖默认模型（来自 .env 的 LLM_MODEL） */
   model?: string;
+  /**
+   * 这一轮代码怎么发（全文/增量/没变）。由调用方用 planCode() 算好传进来。
+   * ★ 必须由调用方算：buildMessages 每次请求会被调用两次（/debug/last-prompt
+   *   那次 + 真正流式那次），如果在这里算就会把版本号推进两次。
+   */
+  codeRender: CodeRender;
+  /** 历史替换表：第 i 条 user 消息原本实际发出去的文本（见 turn-memory.ts） */
+  userTexts?: (string | null)[];
 }
 
 /** .env 的 LLM_MODEL：默认用哪个 */
@@ -55,9 +64,20 @@ export function allowedModels(): string[] {
  *    用户要盯着空白面板几十秒（实测 pro 模型首字节 77s）。
  *  - content：正文
  */
-export interface StreamChunk {
-  kind: "thinking" | "content";
-  text: string;
+export type StreamChunk =
+  | { kind: "thinking" | "content"; text: string; usage?: undefined }
+  | { kind: "usage"; text: ""; usage: Usage };
+
+/**
+ * 上游给的用量。**这是唯一能验证"前缀缓存到底有没有命中"的实测数据**，
+ * 所以专门捞出来记日志（DeepSeek 会在最后一帧带上 prompt_cache_hit_tokens）。
+ */
+export interface Usage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
 }
 
 /** 流式对话 */
@@ -74,7 +94,7 @@ export async function* streamChat(
   if (!apiKey) throw new Error("未设置 LLM_API_KEY");
   if (!model) throw new Error("未设置 LLM_MODEL");
 
-  const messages = buildMessages(req, systemPrompt);
+  const messages = buildMessages(req, systemPrompt, opts.codeRender, opts.userTexts ?? []);
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
@@ -86,6 +106,8 @@ export async function* streamChat(
       model,
       messages,
       stream: true,
+      // 让上游在最后一帧带上 usage（含缓存命中数）—— 不然没法验证优化有没有用
+      stream_options: { include_usage: true },
       temperature: opts.temperature ?? 0.3,
       ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
     }),
@@ -100,6 +122,7 @@ export async function* streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
+  let usage: Usage | null = null;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -120,6 +143,8 @@ export async function* streamChat(
         if (!payload || payload === "[DONE]") continue;
         try {
           const j = JSON.parse(payload);
+          // ★ usage 那一帧没有 choices，所以必须在取 delta 之前先看它
+          if (j.usage) usage = j.usage as Usage;
           const delta = j.choices?.[0]?.delta;
           if (!delta) continue;
           // 推理模型的思考过程
@@ -135,6 +160,9 @@ export async function* streamChat(
       }
     }
   }
+
+  // 流结束：把用量作为最后一帧交出去（调用方负责记录，不要塞进正文）
+  if (usage) yield { kind: "usage", text: "", usage };
 }
 
 const MEMORY_RE = /<memory>\s*([\s\S]*?)\s*<\/memory>/g;

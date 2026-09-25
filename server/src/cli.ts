@@ -13,7 +13,10 @@
 import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildMessages, renderForReview } from "./context.ts";
+import { renderMessagesForReview } from "./context.ts";
+import { resetCodeMemory } from "./code-version.ts";
+import { resetTurnMemory } from "./turn-memory.ts";
+import { planPrompt, planSummary } from "./prompt-plan.ts";
 import { loadEnv, streamChat, stripMemoryBlocks } from "./llm.ts";
 import { htmlToMarkdown } from "./html.ts";
 import type { ChatRequest } from "./types.ts";
@@ -42,10 +45,41 @@ if (req.problem?.content && /<[a-z][\s\S]*>/i.test(req.problem.content)) {
 
 const systemPrompt = readFileSync(resolve(HERE, "prompts/system.md"), "utf8");
 
-if (dryRun) {
-  console.log(renderForReview(req, systemPrompt));
+/**
+ * --dry-run 时反复演练"多轮"：每轮模拟用户改一行 + 问一句，
+ * 并且老实调用 commit()（假装上一轮真的发出去了），
+ * 这样第二轮开始就能看到"发增量"，第 6 轮能看到"到点重发全文"。
+ *
+ *   node src/cli.ts --dry-run --revs=3 fixtures/xxx.json
+ */
+const revs = Number((argv.find((a) => a.startsWith("--revs=")) ?? "--revs=1").split("=")[1]) || 1;
+const SID = "cli-dry-run";
+resetCodeMemory();
+resetTurnMemory();
 
-  const msgs = buildMessages(req, systemPrompt);
+if (dryRun) {
+  let plan = planPrompt({ ...req, sessionId: SID }, systemPrompt);
+  for (let i = 1; i < revs; i++) {
+    plan.commit();
+    // 模拟"用户又改了一行，然后追问"
+    req.code = req.code.replace(/\n?$/, "") + `\n# 改动 ${i}\n`;
+    req.messages = [
+      ...(req.messages ?? []),
+      { role: "assistant", content: `（第 ${i} 轮的回答）` },
+      { role: "user", content: `第 ${i + 1} 问：这版呢？` },
+    ];
+    plan = planPrompt({ ...req, sessionId: SID }, systemPrompt);
+  }
+  const r = plan.render;
+  console.log(`第 ${revs} 轮 → ${planSummary(plan, { ...req, sessionId: SID })}`);
+  console.log(
+    `代码发送方式: rev=${r.rev} mode=${r.mode} 原因=${r.reason} ` +
+      `全文=${r.stats.fullChars}字符 实发=${r.stats.sentChars}字符` +
+      (r.mode === "diff" ? `（省 ${Math.round((1 - r.stats.ratio) * 100)}%）` : "") +
+      "\n"
+  );
+  const msgs = plan.build(systemPrompt);
+  console.log(renderMessagesForReview(msgs));
   const total = msgs.reduce((a, m) => a + m.content.length, 0);
   console.log("\n" + "─".repeat(80));
   console.log("统计：");
@@ -73,6 +107,18 @@ let firstByte: number | null = null;
 try {
   for await (const chunk of streamChat(req, systemPrompt)) {
     if (firstByte === null) firstByte = Date.now() - t0;
+    if (chunk.kind === "usage") {
+      const u = chunk.usage;
+      const hit = u.prompt_cache_hit_tokens,
+        miss = u.prompt_cache_miss_tokens;
+      if (hit != null && miss != null) {
+        process.stderr.write(
+          `[用量] 输入 ${u.prompt_tokens} 输出 ${u.completion_tokens} ` +
+            `缓存命中 ${Math.round((hit / Math.max(1, hit + miss)) * 100)}% (${hit}+${miss})\n`
+        );
+      }
+      continue;
+    }
     if (chunk.kind === "thinking") {
       if (thinking === 0) process.stderr.write("\n[思考中] ");
       thinking += chunk.text.length;

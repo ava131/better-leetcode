@@ -19,8 +19,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFileSync, appendFileSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildMessages, renderForReview } from "./context.ts";
+import { renderMessagesForReview } from "./context.ts";
 import { loadEnv, streamChat, stripMemoryBlocks, allowedModels, defaultModel } from "./llm.ts";
+import { resetCodeMemory, codeMemoryStats } from "./code-version.ts";
+import { resetTurnMemory, turnMemoryStats } from "./turn-memory.ts";
+import { planPrompt, planSummary } from "./prompt-plan.ts";
 import {
   dbStatus,
   upsertProblem,
@@ -63,7 +66,7 @@ function log(msg: string) {
 const diagRing: string[] = [];
 
 /** 上一次实际发出的内容，供 /debug/last-prompt 查看 */
-let lastPrompt: { at: string; rendered: string } | null = null;
+let lastPrompt: { at: string; rendered: string; codeRev?: number; codeMode?: string } | null = null;
 
 /** /models 的探测结果缓存 */
 let modelsCache: { at: number; list: string[] } | null = null;
@@ -197,9 +200,23 @@ const server = createServer(async (req, res) => {
 
     // ---------- 调 prompt 用 ----------
     if (path === "/debug/last-prompt" && req.method === "GET") {
+      if (path === "/debug/code-memory") {
+        return json(res, 200, codeMemoryStats());
+      }
+      if (path === "/debug/turn-memory") {
+        return json(res, 200, turnMemoryStats());
+      }
+      if (path === "/debug/forget-code") {
+        resetCodeMemory();
+        resetTurnMemory();
+        return json(res, 200, { ok: true, note: "已清空代码版本账本，下一轮会重发全文" });
+      }
       if (!lastPrompt) return json(res, 404, { error: "还没有发过请求" });
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
-      return res.end(`# 发送于 ${lastPrompt.at}\n\n${lastPrompt.rendered}`);
+      return res.end(
+        `# 发送于 ${lastPrompt.at}  代码 rev=${lastPrompt.codeRev ?? "?"} 模式=${lastPrompt.codeMode ?? "?"}\n\n` +
+          lastPrompt.rendered
+      );
     }
 
     // ---------- 对话历史 ----------
@@ -259,6 +276,11 @@ const server = createServer(async (req, res) => {
         else console.warn(`[chat] 拒绝未在白名单内的模型 "${requested}"，回退到 ${useModel}`);
       }
 
+      // ★ 提示词计划**只算一次**，而且必须在 log 之前算好（log 里要报 rev/模式）。
+      //   算的时候只读；真正提交要等上游收下 prompt（见 prompt-plan.ts 开头那段注释）。
+      const plan = planPrompt(chatReq, SYSTEM_PROMPT);
+      const cr = plan.render;
+
       // 题目元信息入库（外键锚点）
       if (chatReq.problem?.id) upsertProblem(chatReq.problem);
 
@@ -285,12 +307,17 @@ const server = createServer(async (req, res) => {
           `用例=${chatReq.testcase ? "有" : "无"} ` +
           `代码=${chatReq.code?.length ?? 0}字符 题干=${chatReq.problem.content?.length ?? 0}字符 ` +
           `历史=${chatReq.messages?.length ?? 0}条 ` +
+          `代码rev=${cr.rev}/${cr.mode}` +
+          (cr.mode === "diff" ? `(省${Math.round((1 - cr.stats.ratio) * 100)}%)` : "") +
+          ` ${planSummary(plan, chatReq)} ` +
           `问题="${(chatReq.messages?.[chatReq.messages.length - 1]?.content ?? "").slice(0, 40)}"`
       );
 
       lastPrompt = {
         at: new Date().toISOString(),
-        rendered: renderForReview(chatReq, SYSTEM_PROMPT),
+        rendered: renderMessagesForReview(plan.build(SYSTEM_PROMPT)),
+        codeRev: cr.rev,
+        codeMode: cr.mode,
       };
 
       res.writeHead(200, {
@@ -311,12 +338,23 @@ const server = createServer(async (req, res) => {
       let full = "";
       let firstByteMs: number | null = null;
       let thinkingChars = 0;
+      let usage: Record<string, number> | null = null;
       try {
         for await (const chunk of streamChat(chatReq, SYSTEM_PROMPT, {
           signal: ac.signal,
           model: useModel,
+          codeRender: cr,
+          userTexts: plan.texts,
         })) {
-          if (firstByteMs === null) firstByteMs = Date.now() - t0;
+          if (firstByteMs === null && chunk.kind !== "usage") {
+            firstByteMs = Date.now() - t0;
+            // 上游确实收下了这份 prompt，从这一刻起模型"看过"这一轮了
+            plan.commit();
+          }
+          if (chunk.kind === "usage") {
+            usage = chunk.usage as Record<string, number>;
+            continue; // ★ 千万别落到下面 full += chunk.text
+          }
           if (chunk.kind === "thinking") {
             thinkingChars += chunk.text.length;
             send("thinking", { text: chunk.text });
@@ -337,9 +375,18 @@ const server = createServer(async (req, res) => {
             content: text,
           });
         }
+        // ★ 这两行是验证"前缀缓存到底有没有命中"的唯一实测来源
+        const u = usage ?? {};
+        const hit = u.prompt_cache_hit_tokens,
+          miss = u.prompt_cache_miss_tokens;
+        const cache =
+          hit != null && miss != null
+            ? `缓存命中=${Math.round((hit / Math.max(1, hit + miss)) * 100)}%(${hit}+${miss})`
+            : "缓存=上游没返回";
         log(
           `[chat] 完成 首字节=${firstByteMs ?? "?"}ms 总耗时=${Date.now() - t0}ms ` +
-            `思考=${thinkingChars}字符 正文=${text.length}字符`
+            `思考=${thinkingChars}字符 正文=${text.length}字符 ` +
+            `输入=${u.prompt_tokens ?? "?"} 输出=${u.completion_tokens ?? "?"} ${cache}`
         );
         send("done", {
           chars: text.length,

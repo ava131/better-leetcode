@@ -206,7 +206,13 @@ console.log("\n=== 10) 滚动：不能每来一个 token 就把用户拽回底�
   );
 }
 
-console.log("\n=== 11) 版本号别跟 manifest 走散 ===");
+console.log("\n=== 11) 会话 id 要活得比刷新久 ===");
+// 后端用 sessionId 当「代码版本账本 + 上一轮实际发出去的文本」的 key。
+// 不持久化的话每次 F5 都换新 id：白重发全文，还会把同一段对话在历史库里拆成两条。
+check("saveSession 存了 sid", /sid:\s*S\._sid/.test(SRC));
+check("restoreSession 恢复 sid", /S\._sid = typeof s\.sid/.test(SRC));
+
+console.log("\n=== 12) 版本号别跟 manifest 走散 ===");
 // 面板标题旁的 vX.Y.Z 是判断"扩展到底刷没刷新"的唯一可信信号（HANDOFF §7），
 // 两处写岔了就会骗人。
 {

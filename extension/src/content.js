@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.7.2";
+  const VER = "0.8.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -1574,6 +1574,10 @@
       await chrome.storage.session.set({
         [SESSION_KEY]: {
           slug: S.slug,
+          // ★ 会话 id 必须存：后端拿它做「代码版本账本 / 上一轮实际发出去的文本」的 key。
+          //   不存的话每次 F5 都换一个新 id，后端就只能重发全文、并且把同一段对话
+          //   在历史库里拆成两条。
+          sid: S._sid,
           at: Date.now(),
           problem: S.problem,
           messages: S.messages.slice(-40),
@@ -1606,6 +1610,7 @@
       if (s.at && Date.now() - s.at > 6 * 3600_000) return false;
 
       S.slug = s.slug;
+      S._sid = typeof s.sid === "string" && s.sid ? s.sid : null;
       S.problem = s.problem ?? null;
       S.messages = Array.isArray(s.messages) ? s.messages : [];
       S.code = s.code || S.code;

@@ -357,61 +357,47 @@ UI 侧要有对应的「思考中…」指示（转圈 + 累计字数），正�
 ### 4.4 上下文组装管线
 
 ```
-输入: Record<string, unknown>（扩展传来的上下文快照）
+输入: ChatRequest（扩展传来的快照：题干 + 整份代码 + 判题 + 原始对话）
   ↓
 1. 规范化
    · 题干 HTML → markdown（去掉标签、样式、脚本）
-   · 代码原样保留（不 trim 缩进！）
+   · 代码原样保留（不 trim 缩进！行尾统一 \n）
    · 失败用例的输入可能很长 → 若 > 2000 字符，截断并标注
   ↓
-2. 组装 XML 标签块（结构清晰，模型对标签边界识别好）
+2. planCode()：决定这一轮代码怎么发
+   · 首次 / 换语言 / 改动太大 / 链条断 / 每 6 版 → 发全文
+   · 只改了几行 → 发 unified diff（相对上一版）
+   · 一模一样 → 发一行"没变"
   ↓
-3. 拼接记忆（从 SQLite 捞当前题）
+3. planTurns()：把历史里每条 user 消息换成**当时实际发出去的那份文本**
+   （见 §4.6，这是前缀缓存能命中的前提）
   ↓
-4. 产出 { system, messages, contextBlock }
+4. 组装 → [system: 提示词 + 题干] + 历史 + [最后一条 user: <context> + 本轮问题]
 ```
 
-**组装出的 context 块长这样**：
+**排布顺序是这份设计里最值钱的一条**（见 §4.6）。产出的 context 块长这样：
 
 ```xml
-<problem>
-  <title>141. 环形链表</title>
-  <difficulty>Easy</difficulty>
-  <tags>哈希表, 链表, 双指针</tags>
-  <content>
-    给你一个链表的头节点 head，判断链表中是否有环。...
-  </content>
-</problem>
-
-<code lang="python3">
-class Solution:
-    def hasCycle(self, head: Optional[ListNode]) -> bool:
-        ...
+<code rev="8" lang="python3" diff_from="7" format="unified-diff">
+<note>这是相对 rev 7 的增量；rev 7 的全文就在你上面的对话里…</note>
+@@ -12,6 +12,6 @@
+             slow = slow.next
+-            fast = fast.next.next
++            fast = fast.next
+         return False
 </code>
 
 <judge verdict="Wrong Answer" passed="17" total="29">
-  <failed_case index="18">
+  <failed_case>
     <input>[-21,10,17,8,...]</input>
     <your_output>true</your_output>
     <expected>false</expected>
   </failed_case>
 </judge>
 
-<memory problem="环形链表">
-  <stuck_points>
-    <point count="3">去重时 while 的边界
-      <insight>闭区间/半开区间语义没统一</insight>
-    </point>
-  </stuck_points>
-  <approaches>
-    <approach mastered="true">快慢指针 O(n)/O(1)</approach>
-    <approach mastered="false">哈希表 O(n)/O(n)</approach>
-  </approaches>
-</memory>
-
 <code_history>
-  <!-- 仅当会话内有多次提交，且用户问到"刚才那版"时才带 -->
-  <version n="1" verdict="Wrong Answer">...</version>
+  <!-- 仅当会话内有多次提交 -->
+  <version n="1" verdict="Wrong Answer">…</version>
 </code_history>
 ```
 
@@ -425,21 +411,50 @@ class Solution:
 2. **具体到行**：能指出"第 7 行 `left = mid` 少了 `+1`"，不停在"边界有问题"这种粒度 —— **这是相对题解唯一的实质优势**
 3. **直接回答**：用户问思路就讲思路，问复杂度就分析复杂度，要代码就给代码。**不做"克制不给答案"的导师**（PRD §2.2）
 4. **逐步调试的格式**：用户要求时，挑**最小的**输入，逐步展开**只列相关变量**，走到出问题那一步停下
-5. **记忆建议**：仅在有可复用价值时，在末尾附 `<memory>{...}</memory>`，否则不加
+5. **看懂增量**：`<code>` 可能是 diff 形态，要求模型先还原再回答；**找不到基准全文时不许猜，直接要全文**
 
-### 4.6 成本控制
+### 4.6 成本控制（v0.8 重写：前缀缓存）
+
+DeepSeek 的 context caching 是**自动**的：从 token 0 开始比对，**第一个不一致的地方之后全部作废**，
+命中的部分按约 1/10 计费。所以只有两条杠杆：**把易变的挪到最后** + **让易变的部分尽量短**。
+
+**排布（v0.8 起）**：
+
+```
+[system]  系统提示词 + 题干                     ← 换题才变
+[user]    ……历史对话（含当时发出去的 <context>）……  ← 只追加，永不改写
+[user]    <context>代码/判题</context> + 本轮问题   ← 易变，全部堆在末尾
+```
+
+**v0.7 的排法是反的**：代码和判题被塞进 system 消息（历史**前面**），于是每改一行代码，
+整段历史都要按全价重算。
+
+**实测 A/B**（同一套"每轮改一行 + 追问"的 10 轮场景，`deepseek-flash`，看 `[chat] 完成` 的
+`prompt_cache_hit_tokens`）：
+
+| 轮次 | 旧排布 命中/未命中 | 新排布 命中/未命中 |
+|---|---|---|
+| 5 | 54%（1664/1404） | 86%（3968/640） |
+| 7 | 47%（1664/1894） | 89%（5376/660） |
+| 10 | 39%（1664/2629） | 92%（7040/631） |
+
+读法：**旧排布的命中被钉死在 1664**（= 代码块之前那段），未命中每轮 +245 一路涨；
+新排布命中跟着历史一起长，未命中稳定在 600 上下。按价格折算，10 轮下来输入侧便宜约 35%，
+而且差距随轮数线性拉大（输入是 O(n²)，输出是 O(n)）。
+
+其它手段：
 
 | 手段 | 说明 |
 |---|---|
 | 只就位不自动发问 | 最有效的一条：没有提问就没有调用 |
-| 上下文只在提问时组装 | 代码变更只写本地缓存，不发请求 |
 | 题干 HTML → markdown | 通常能砍掉 60~80% 字符 |
-| 会话内 `context` 全量重发 | 题干+代码约几百 token，不值得为省它引入增量复杂度（PRD §8.6） |
-| `messages` 只保留最近 N 轮 | N 默认 10，防止长会话线性增长 |
-| 记录每次调用成本 | `/chat` 的 `done` 事件带 token 与费用，可累计查看 |
+| 代码发增量而不是全文 | 省的是"未命中的尾巴"；代码 < 600 字符时不划算（diff 跟全文一样长） |
+| 三个安全阀 | 首次/换语言/大改/链条断 → 全文；每 6 版 → 全文（防模型理解歪了） |
+| 记 `usage` | `/chat` 的完成日志带输入/输出/**缓存命中**，任何上下文改动的收益都能直接读数 |
+| 输出侧才是大头 | 实测思考占输出的 55%，输出单价是输入的 4~15 倍 → 输出占账单 77%~92% |
 
----
-
+**别踩的坑**：不要压缩/改写历史（每轮改写 = 每轮全量 miss）；稳定区不许有易变字节
+（时间戳、session id、瞬时判题状态）；压缩和缓存是对立的，要压就一次性压实。
 ## 5. 记忆层设计
 
 ### 5.1 SQLite schema
@@ -561,6 +576,11 @@ submissions(id, problem_id, lang, verdict, passed, total, created_at)
 | **★43** | **`anchor()` 自己写 `scrollTop` 会触发一次 `scroll` 事件**，监听器一算"现在贴着底呀"就把 `stickToBottom` 翻回 `true` → 又开始追尾部。真浏览器里复现为 `scrollTop` 1065 → 1528 → 1991 一路跟着走，而**静态检查全绿** | 必须把"代码滚的"和"用户滚的"分开：唯一写入口 `setScrollTop()` 记下 `selfScrollTop`，`scroll` 监听发现 `scrollTop === selfScrollTop` 就直接 return，不改用户意图。**"代码自己要滚"和"用户要滚"是两种意图，不能共用一套几何判断** |
 | **★44** | 探针的 `CHROME_STUB` 是**模板字符串**，里面写 `
 ` 会被解成真换行 → 注入的桩代码 `SyntaxError` → **整段桩压根没跑** → 扩展以为后端没连上 → `ui-wiring.mjs` 10 条全红，看起来像扩展坏了，其实是脚手架坏了。`node --check tools/probe/cdp.mjs` **查不出来** | 凡是要注入页面的代码，都先当**独立文件**跑一次语法检查 —— 见 `tools/probe/selfcheck.mjs`（不开浏览器，13 项）。这个坑我踩过两次 |
+| **★45** | **易变块（代码/判题）放在 system 消息里 = 前缀缓存全废**。历史排在它后面，所以你每改一行代码，整段历史都按全价重算。实测 10 轮会话：命中被钉死在 1664，未命中每轮 +245 涨到 2629（39%） | 排布改成 `[system: 提示词+题干][历史…][易变块+本轮问题]`。见 §4.6 的实测对照 |
+| **★46** | **发增量看着很香，但历史是从客户端的"原话"重建的，上一轮的 `<context>` 整块消失** → 模型手上只剩"相对 rev 7 的差异"，却找不到 rev 7，于是开始**猜代码**。这比多花 token 严重得多 | 加 `turn-memory.ts`：把上一轮**实际发出去**的每条 user 文本记下来，下一轮原样放回去，prompt 变成严格 append-only。对不上就判"链条断了"，这一轮老实发全文。真浏览器/真接口验证过：`链条=完整 复用=1/2/3条` |
+| **★47** | `planCode` 如果写成在 `buildMessages` 里顺手推进版本号，**一次请求会推进两次**（`/debug/last-prompt` 那次 + 真正流式那次）→ 下一轮的增量基准全错 | 用 `prompt-plan.ts` 把"算计划"和"提交"分开：`planPrompt()` 只读，`commit()` 显式调，而且只在**上游首字节到达之后**才提交（那才代表模型真看过了） |
+| **★48** | 短代码发增量是**倒帮忙**：一个改动块的 diff ≈ 8 行（改 1 行 + 上下各 3 行上下文）≈ 240 字符，而 9 行的题解全文才 250 字符 —— diff 是全文的 95% | 加 `DIFF_MIN_CHARS = 600`（约 20 行）门槛 + `DIFF_MAX_RATIO = 0.5` 比例保险。单测里两条都钉住了 |
+| **★49** | **改动顺序时把新变量用在了声明之前**（`log()` 里报 `cr.rev`，而 `cr` 在后面才算）→ TDZ `ReferenceError`，`/chat` 全部 500。**单测全绿也照样挂**，因为单测不跑 HTTP 处理器 | 真接口跑一遍才发现。**这类"接线顺序"问题只有端到端能抓** —— 所以每次都真的起后端跑一轮，别只跑单测 |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |

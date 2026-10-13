@@ -76,6 +76,11 @@ export interface ChatRequest {
   run?: RunResult | null;
   /** 最近一次动作，决定 UI 优先展示谁 */
   lastAction?: "run" | "submit" | null;
+  /**
+   * 用户此刻的光标位置（读编辑器得到的，不是他选的）。
+   * ⚠️ 只是"他在看哪儿"，不代表他问的就是这一行 —— prompt 里必须说清楚。
+   */
+  cursor?: { line: number; column?: number; text?: string } | null;
   /** 会话内的历史代码快照（最近 2 份），不落库 */
   codeHistory?: CodeSnapshot[];
   /** 只放"说过的话" + system 标记，不含代码 */

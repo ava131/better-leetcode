@@ -6,6 +6,10 @@
  */
 import { htmlToMarkdown } from "../src/html.ts";
 import { buildMessages } from "../src/context.ts";
+import { loadSystemPrompt, clearPromptCache } from "../src/prompt.ts";
+import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { stripMemoryBlocks } from "../src/llm.ts";
 
 let pass = 0;
@@ -64,6 +68,40 @@ console.log("\n=== 4) 漏传 render 不许崩（v0.8 真的崩过）===");
   check("不传 render 不抛异常", msgs !== null, err);
   const all = (msgs ?? []).map((m) => m.content).join("\n");
   check("兜底成了全文", all.includes("<code") && all.includes("print(1)"), all.slice(-160));
+}
+
+console.log("\n=== 5) prompt 热重载（改 prompt 不用重启后端）===");
+{
+  const dir = mkdtempSync(join(tmpdir(), "bl-prompt-"));
+  const f = join(dir, "system.md");
+  clearPromptCache(f);
+
+  writeFileSync(f, "第一版");
+  const a = loadSystemPrompt(f);
+  const b = loadSystemPrompt(f);
+  check("第一次读出第一版", a === "第一版", a);
+  check("内容没变时走缓存（同一个值）", b === a, b);
+
+  writeFileSync(f, "第二版，更长一点");
+  // 同一毫秒内写完 mtime 可能没变，显式推一下（真机上编辑器保存不会这么快）
+  const t = new Date(Date.now() + 2000);
+  utimesSync(f, t, t);
+  const c = loadSystemPrompt(f);
+  check("文件一改，下一个请求就读到新版（不用重启）", c === "第二版，更长一点", c);
+
+  // 读不到文件时不能崩，也不能把 prompt 变成空字符串
+  rmSync(f);
+  let d = "";
+  let err = "";
+  try {
+    d = loadSystemPrompt(f);
+  } catch (e) {
+    err = (e as Error).message;
+  }
+  check("文件被挪走时不抛异常", err === "", err);
+  check("读不到就继续用上一份", d === "第二版，更长一点", d);
+
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${"─".repeat(50)}\n结果: ${pass} 通过, ${fail} 失败`);

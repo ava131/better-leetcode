@@ -21,6 +21,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMessagesForReview } from "./context.ts";
 import { loadEnv, streamChat, stripMemoryBlocks, allowedModels, defaultModel } from "./llm.ts";
+import { loadSystemPrompt, promptStatus } from "./prompt.ts";
 import { resetCodeMemory, codeMemoryStats } from "./code-version.ts";
 import { resetTurnMemory, turnMemoryStats } from "./turn-memory.ts";
 import { planPrompt, planSummary } from "./prompt-plan.ts";
@@ -46,7 +47,8 @@ const PROJECT_ROOT = resolve(HERE, "..");
 loadEnv(resolve(PROJECT_ROOT, ".env"));
 
 const PORT = Number(process.env.PORT ?? 8787);
-const SYSTEM_PROMPT = readFileSync(resolve(HERE, "prompts/system.md"), "utf8");
+// ★ 不再启动读一次：每次请求按 mtime 热重载（改 prompt 不用重启后端）。
+//   见 src/prompt.ts。
 
 /** 日志同时写 stdout 和文件（文件是为了让 AI 助手/事后排查能读到） */
 const LOG_FILE = resolve(PROJECT_ROOT, "bl-server.log");
@@ -175,6 +177,14 @@ const server = createServer(async (req, res) => {
         baseUrl: process.env.LLM_BASE_URL ?? null,
         hasKey: !!process.env.LLM_API_KEY,
         db: dbStatus(),
+        prompt: (() => {
+          try {
+            const x = promptStatus();
+            return { chars: x.chars, mtimeMs: x.mtimeMs };
+          } catch (e) {
+            return { error: (e as Error).message };
+          }
+        })(),
       });
     }
 
@@ -198,19 +208,21 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // ---------- 看"代码版本账本 / 逐轮记忆"（排查"为什么这轮发了全文"）----------
+    if (path === "/debug/code-memory" && req.method === "GET") {
+      return json(res, 200, codeMemoryStats());
+    }
+    if (path === "/debug/turn-memory" && req.method === "GET") {
+      return json(res, 200, turnMemoryStats());
+    }
+    if (path === "/debug/forget-code" && req.method === "GET") {
+      resetCodeMemory();
+      resetTurnMemory();
+      return json(res, 200, { ok: true, note: "已清空代码版本账本，下一轮会重发全文" });
+    }
+
     // ---------- 调 prompt 用 ----------
     if (path === "/debug/last-prompt" && req.method === "GET") {
-      if (path === "/debug/code-memory") {
-        return json(res, 200, codeMemoryStats());
-      }
-      if (path === "/debug/turn-memory") {
-        return json(res, 200, turnMemoryStats());
-      }
-      if (path === "/debug/forget-code") {
-        resetCodeMemory();
-        resetTurnMemory();
-        return json(res, 200, { ok: true, note: "已清空代码版本账本，下一轮会重发全文" });
-      }
       if (!lastPrompt) return json(res, 404, { error: "还没有发过请求" });
       res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
       return res.end(
@@ -278,7 +290,8 @@ const server = createServer(async (req, res) => {
 
       // ★ 提示词计划**只算一次**，而且必须在 log 之前算好（log 里要报 rev/模式）。
       //   算的时候只读；真正提交要等上游收下 prompt（见 prompt-plan.ts 开头那段注释）。
-      const plan = planPrompt(chatReq, SYSTEM_PROMPT);
+      const sp = loadSystemPrompt(); // 每请求读 → 改 prompt 不用重启
+      const plan = planPrompt(chatReq, sp);
       const cr = plan.render;
 
       // 题目元信息入库（外键锚点）
@@ -315,7 +328,7 @@ const server = createServer(async (req, res) => {
 
       lastPrompt = {
         at: new Date().toISOString(),
-        rendered: renderMessagesForReview(plan.build(SYSTEM_PROMPT)),
+        rendered: renderMessagesForReview(plan.build(sp)),
         codeRev: cr.rev,
         codeMode: cr.mode,
       };
@@ -340,7 +353,7 @@ const server = createServer(async (req, res) => {
       let thinkingChars = 0;
       let usage: Record<string, number> | null = null;
       try {
-        for await (const chunk of streamChat(chatReq, SYSTEM_PROMPT, {
+        for await (const chunk of streamChat(chatReq, sp, {
           signal: ac.signal,
           model: useModel,
           codeRender: cr,
@@ -390,6 +403,9 @@ const server = createServer(async (req, res) => {
         );
         send("done", {
           chars: text.length,
+          // ★ 侧边栏要显示本轮用量（用户问过"会不会浪费上下文"，让他自己看得见）
+          usage: usage ?? null,
+          ms: Date.now() - t0,
           thinkingChars,
           firstByteMs,
           latencyMs: Date.now() - t0,

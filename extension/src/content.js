@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.8.1";
+  const VER = "0.9.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -43,6 +43,8 @@
     submissionId: null,
     /** 会话内的历史代码快照，不落库。见 TECH-DESIGN §8.3 */
     codeHistory: [],
+    cursor: null,
+    lastUsage: null,
     messages: [], // 只放"说过的话" + system 标记
     collapsed: false,
     backendOk: false,
@@ -269,6 +271,12 @@
   .hist .search { background: #111827; border-color: #374151; color: #f3f4f6; }
 }
 
+/* 本轮用量：用户问过"这样会不会浪费上下文"，那让他自己看得见 */
+.usage { flex: 0 0 auto; padding: 0 12px 4px; font-size: 10px; color: #9ca3af;
+  text-align: right; font-family: ui-monospace, Menlo, monospace; cursor: default; }
+.usage[hidden] { display: none; }
+.usage b { color: #6b7280; font-weight: 600; }
+
 .body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .body[hidden] { display: none; }
 .body:empty::after { content: "问点什么。题干和代码已经在我手里了。"; color: #9ca3af; font-size: 12px; }
@@ -341,7 +349,7 @@
 @media (prefers-color-scheme: dark) { .msg.assistant .note { border-top-color: #4b5563; } }
 `;
 
-  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl, jumpEl;
+  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl, jumpEl, usageEl;
 
   /** 小球的形象图。拿不到 URL 就退回文字标（测试环境里 chrome.runtime 可能是 stub） */
   let PET = "";
@@ -384,6 +392,7 @@
       <div class="body"></div>
       <div class="hist" hidden></div>
       <div class="chips"></div>
+      <div class="usage" hidden></div>
       <div class="ft">
         <textarea class="input" rows="1" placeholder="问点什么…  Enter 发送 · Shift+Enter 换行"></textarea>
         <button class="send">发送</button>
@@ -413,6 +422,7 @@
     inputEl = root.querySelector(".input");
     sendEl = root.querySelector(".send");
     jumpEl = root.querySelector(".jump");
+    usageEl = root.querySelector(".usage");
     if (bodyEl) {
       bodyEl.addEventListener("scroll", () => {
         // 代码自己滚出来的 scroll 事件不代表用户意图，丢掉
@@ -548,6 +558,8 @@
     root.querySelector('[data-act="collapse"]').onclick = () => setCollapsed(true);
     root.querySelector('[data-act="clear"]').onclick = () => {
       S.messages = [];
+      S.lastUsage = null;
+      renderUsage();
       renderMessages();
       say("system", "对话已清空（记忆不受影响）");
     };
@@ -1196,6 +1208,37 @@
     };
   }
 
+  /**
+   * 本轮用量。输入里"命中"是按 1 折算、未命中按 10 折算成"等效全价 token"，
+   * 这样一眼就能看出缓存到底省没省 —— 光看总 token 数会以为没变化。
+   */
+  function renderUsage() {
+    if (!usageEl) return;
+    const u = S.lastUsage;
+    if (!u || (!u.prompt_tokens && !u.completion_tokens)) {
+      usageEl.hidden = true;
+      return;
+    }
+    const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n ?? 0));
+    const hit = u.prompt_cache_hit_tokens;
+    const miss = u.prompt_cache_miss_tokens;
+    const parts = [`入 ${fmt(u.prompt_tokens)}`, `出 ${fmt(u.completion_tokens)}`];
+    if (hit != null && miss != null) {
+      const pct = Math.round((hit / Math.max(1, hit + miss)) * 100);
+      parts.push(`缓存 <b>${pct}%</b>`);
+      // 等效全价：未命中 1 份 + 命中 0.1 份
+      parts.push(`≈${fmt(Math.round(miss + hit * 0.1))}`);
+    }
+    if (u.ms) parts.push(`${(u.ms / 1000).toFixed(1)}s`);
+    usageEl.textContent = parts.join(" · ");
+    usageEl.title =
+      `本轮 token 用量\n` +
+      `输入 ${u.prompt_tokens ?? "?"}（缓存命中 ${hit ?? "?"} / 未命中 ${miss ?? "?"}）\n` +
+      `输出 ${u.completion_tokens ?? "?"}\n` +
+      `≈ 是"等效全价 token"：命中的按 1/10 折算，用来一眼看出缓存省了多少`;
+    usageEl.hidden = false;
+  }
+
   function renderChips() {
     const list =
       S.lastAction === "run" && S.run
@@ -1293,6 +1336,8 @@
       S.code = snap.code;
       if (snap.lang) S.lang = snap.lang;
     }
+    // 光标位置只跟这一次请求有关：不发的话后端就不知道他在看哪一行
+    if (snap?.cursor) S.cursor = snap.cursor;
 
     inputEl.value = "";
     inputEl.style.height = "auto";
@@ -1320,6 +1365,7 @@
       total: S.total,
       runtimeError: S.runtimeError,
       codeHistory: S.codeHistory.slice(-2),
+      cursor: S.cursor || undefined,
       messages: S.messages.slice(0, -1).concat([{ role: "user", content: text }]),
     };
 
@@ -1404,6 +1450,8 @@
           bubble.connected();
           bubble.push(m.text);
         } else if (m.type === "done") {
+          if (m.usage) S.lastUsage = { ...m.usage, ms: m.ms ?? null };
+          renderUsage();
           const rendered = bubble.finish();
           // 空回复不入库（例如只有思考没有正文）
           if (rendered.trim()) S.messages.push({ role: "assistant", content: rendered });
@@ -1461,6 +1509,7 @@
         if (d.payload?.code) {
           S.code = d.payload.code;
           if (d.payload.lang) S.lang = d.payload.lang;
+          if (d.payload.cursor) S.cursor = d.payload.cursor;
           statusLine();
         }
         break;
@@ -1798,6 +1847,7 @@
         clearTimeout(t);
         t = setTimeout(async () => {
           const snap = await snapshotCode();
+          if (snap?.cursor) S.cursor = snap.cursor;
           if (snap?.code && snap.code !== S.code) {
             S.code = snap.code;
             if (snap.lang) S.lang = snap.lang;

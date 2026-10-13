@@ -91,6 +91,41 @@
     return null;
   }
 
+  /**
+   * 当前活动的**编辑器对象**（不是 model）。
+   * 光标位置挂在 editor 上（`getPosition()`），model 上没有 —— 所以单独取一份。
+   * 只做最保守的那条路（editors 里有 model 的第一个），拿不到就返回 null。
+   */
+  function activeEditor() {
+    const m = window.monaco;
+    if (!m || !m.editor || !m.editor.getEditors) return null;
+    try {
+      for (const ed of m.editor.getEditors()) {
+        try {
+          if (ed.getModel && ed.getModel()) return ed;
+        } catch {}
+      }
+    } catch {}
+    return null;
+  }
+
+  /** 光标在第几行 + 那一行写了什么。拿不到就 null，绝不影响代码读取 */
+  function readCursor(ed, model) {
+    try {
+      if (!ed || !model || !ed.getPosition) return null;
+      const pos = ed.getPosition();
+      if (!pos || !pos.lineNumber) return null;
+      const text = model.getLineContent ? model.getLineContent(pos.lineNumber) : "";
+      return {
+        line: pos.lineNumber,
+        column: pos.column || 0,
+        text: String(text ?? "").slice(0, 200),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   function readEditor() {
     try {
       const model = activeModel();
@@ -100,7 +135,13 @@
         try {
           langId = model.getLanguageId ? model.getLanguageId() : model.getModeId ? model.getModeId() : "";
         } catch {}
-        return { code, langId, lang: LANG_MAP[langId] || langId || null, source: "monaco" };
+        return {
+          code,
+          langId,
+          lang: LANG_MAP[langId] || langId || null,
+          source: "monaco",
+          cursor: readCursor(activeEditor(), model),
+        };
       }
     } catch {}
 
@@ -108,11 +149,11 @@
     try {
       const ta = document.querySelector("textarea.inputarea, textarea[aria-label]");
       if (ta && typeof ta.value === "string" && ta.value.trim()) {
-        return { code: ta.value, langId: "", lang: null, source: "textarea" };
+        return { code: ta.value, langId: "", lang: null, source: "textarea", cursor: null };
       }
     } catch {}
 
-    return { code: null, langId: "", lang: null, source: null };
+    return { code: null, langId: "", lang: null, source: null, cursor: null };
   }
 
   // ───────────────────────── 题干 ─────────────────────────

@@ -212,7 +212,23 @@ console.log("\n=== 11) 会话 id 要活得比刷新久 ===");
 check("saveSession 存了 sid", /sid:\s*S\._sid/.test(SRC));
 check("restoreSession 恢复 sid", /S\._sid = typeof s\.sid/.test(SRC));
 
-console.log("\n=== 12) 版本号别跟 manifest 走散 ===");
+console.log("\n=== 12) 光标行 + 本轮用量 ===");
+{
+  // 光标：拦截器读 → content 存 → 随请求发出去。少一环后端就不知道他在看哪一行。
+  check("拦截器会读光标位置", IC.includes("function readCursor") && IC.includes("getPosition"));
+  check("readEditor 把 cursor 带上", /cursor:\s*readCursor\(/.test(IC));
+  check("拿不到光标时是 null（不影响读代码）", IC.includes("cursor: null"));
+  check("content.js 收到 code 时存下光标", /S\.cursor = d\.payload\.cursor/.test(SRC));
+  check("发送前刷新一次光标", /if \(snap\?\.cursor\) S\.cursor = snap\.cursor;/.test(SRC));
+  check("请求里带 cursor", /cursor: S\.cursor \|\| undefined/.test(SRC));
+  // 用量：后端 done 里带 usage → content 显示
+  check("done 里会取 usage", /if \(m\.usage\) S\.lastUsage/.test(SRC));
+  check("有渲染用量的函数", SRC.includes("function renderUsage"));
+  check("HTML 里有 .usage 容器", SRC.includes('class="usage"') && SRC.includes("usageEl = root.querySelector"));
+  check("用量里给出缓存命中率", SRC.includes("prompt_cache_hit_tokens") && SRC.includes("缓存 <b>"));
+}
+
+console.log("\n=== 13) 版本号别跟 manifest 走散 ===");
 // 面板标题旁的 vX.Y.Z 是判断"扩展到底刷没刷新"的唯一可信信号（HANDOFF §7），
 // 两处写岔了就会骗人。
 {

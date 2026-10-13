@@ -378,6 +378,11 @@ UI 侧要有对应的「思考中…」指示（转圈 + 累计字数），正�
 **排布顺序是这份设计里最值钱的一条**（见 §4.6）。产出的 context 块长这样：
 
 ```xml
+<cursor line="7">
+<note>用户此刻的光标在第 7 行 —— 这只是「他在看哪儿」，**不代表他问的就是这一行**。</note>
+<line>            fast = fast.next.next</line>
+</cursor>
+
 <code rev="8" lang="python3" diff_from="7" format="unified-diff">
 <note>这是相对 rev 7 的增量；rev 7 的全文就在你上面的对话里…</note>
 @@ -12,6 +12,6 @@
@@ -420,6 +425,8 @@ UI 侧要有对应的「思考中…」指示（转圈 + 累计字数），正�
 
    ⚠️ 别把它写成「克制不给答案的导师」（PRD §2.2 明令非目标）。区别是：
    **明确要就给；没要就别顺手贴整份解。** 措辞上要保住「直接回答，不要绕」。
+7. **别把结论硬往光标那行上凑**（`<cursor>`）：那只是「他在看哪儿」，
+   用户自己就说了「我想问的时候不一定光标就在我想问的那一行」。
 
 ### 4.6 成本控制（v0.8 重写：前缀缓存）
 
@@ -590,6 +597,7 @@ submissions(id, problem_id, lang, verdict, passed, total, created_at)
 | **★48** | 短代码发增量是**倒帮忙**：一个改动块的 diff ≈ 8 行（改 1 行 + 上下各 3 行上下文）≈ 240 字符，而 9 行的题解全文才 250 字符 —— diff 是全文的 95% | 加 `DIFF_MIN_CHARS = 600`（约 20 行）门槛 + `DIFF_MAX_RATIO = 0.5` 比例保险。单测里两条都钉住了 |
 | **★49** | **改动顺序时把新变量用在了声明之前**（`log()` 里报 `cr.rev`，而 `cr` 在后面才算）→ TDZ `ReferenceError`，`/chat` 全部 500。**单测全绿也照样挂**，因为单测不跑 HTTP 处理器 | 真接口跑一遍才发现。**这类"接线顺序"问题只有端到端能抓** —— 所以每次都真的起后端跑一轮，别只跑单测 |
 | **★50** | v0.8 把 `buildMessages` 的 render 改成必填后，**`cli.ts` 的真实调用路径忘了传** → 读 `render.lang` 直接抛 `Cannot read properties of undefined`，**M1 那个「手动喂题」的工具整整坏了一版**。而单测全绿 —— 因为**没有任何单测调用 `streamChat`** | ① 在唯一咽喉处兜底（`render` 可选 + `fallbackRender`），漏传最多退化成「多发点 token」 ② `smoke.ts` 加一条「不传 render 不许崩」 ③ **改 prompt / 改组装管线之后必须真跑一次 CLI 或起后端**，别只跑单测 |
+| **★51** | 三个新调试端点（`/debug/code-memory` 等）被我**塞进了 `/debug/last-prompt` 的 if 分支里** → 条件互斥，**永远是死代码**；而 `node --check` 当然通过 | 新 HTTP 测试第一次跑就红了。教训：**路由是平铺的，别在 A 路由的分支里判断 B 路由**；每加一个端点就在 `test/http.ts` 里点一次 |
 | **★22** | **测试环境必须还原 world 隔离**，否则会漏掉 ★20 这类 bug | CDP 的 `Page.addScriptToEvaluateOnNewDocument` 支持 `worldName` 参数。**两个脚本都注进同一个 world 是假的**，会掩盖真问题。正确做法：拦截器不带 `worldName`（= MAIN），扩展代码带 `worldName: "bl_ext"`（= ISOLATED）。**另外：每次导航都会新建一个隔离上下文**，`Runtime.executionContextCreated` 会攒一堆失效的 —— 必须取 **id 最大（最新）** 那个，否则你读的是已经死掉的 world 的变量 |
 
 | 7 | GraphQL 未知字段会让**整条 query 报错** | 按需裁剪字段；失败时降级而不是崩 |
@@ -621,6 +629,20 @@ submissions(id, problem_id, lang, verdict, passed, total, created_at)
 ---
 
 ## 9. 测试策略
+
+**六层，从便宜到贵**（每条都是单独一条命令，见 `docs/HANDOFF.md` §7）：
+
+| 层 | 文件 | 守什么 | 数量 |
+|---|---|---|---|
+| 静态自检 | `tools/probe/selfcheck.mjs` | 生成出来要注入的代码有没有语法错（★44） | 13 |
+| 静态接线 | `extension/test/wiring.test.mjs` | 函数/绑定/元素有没有被静默删掉（★29） | 44 |
+| 纯函数单测 | `server/test/diff.ts` / `prompt-order.ts` / `markdown.test.mjs` | diff 往返、**prompt 前缀逐字节稳定**、markdown+XSS | 27 / 26 / 47 |
+| 存储层 | `server/test/history.ts` | SQLite 写入/检索/排序 | 31 |
+| 组装冒烟 | `server/test/smoke.ts` | html→md、`<memory>` 剥离、**漏传 render 不许崩**、prompt 热重载 | 15 |
+| **HTTP 集成** | `server/test/http.ts` | **真的起服务** + 打桩上游 LLM：入参校验、SSE、模型实际收到的 messages、**第二轮增量 + 上一轮原样复用**、调试端点、CLI 真实调用 | 36 |
+
+★ 为什么非要有最后一层：★49（变量用在声明之前）和 ★50（CLI 漏传 render）
+**两次都是「单测全绿、真跑就炸」**。所以这一层不许省。
 
 | 层 | 测什么 | 怎么测 |
 |---|---|---|

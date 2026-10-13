@@ -82,6 +82,30 @@ export function buildCodeBlock(render: CodeRender): string {
   return [`<code rev="${render.rev}" lang="${lang}">`, render.body, `</code>`].join("\n");
 }
 
+/**
+ * 光标块：用户此刻在看第几行。
+ *
+ * ★ 措辞里必须带上"**不代表他问的就是这一行**" —— 用户自己就提醒过：
+ *   "我想问的时候不一定光标就在我想问的那一行"。光标只是"他在看哪儿"，
+ *   如果模型把它当成"问题就出在这行"，会开始硬凑结论。
+ */
+export function buildCursorBlock(req: ChatRequest): string | null {
+  const c = req.cursor;
+  if (!c || !c.line || c.line < 1) return null;
+  // ★ 不 trim：Python 的缩进本身是有信息的（能看出嵌套层级），只判断"空不空"
+  const text = c.text ?? "";
+  return [
+    `<cursor line="${c.line}">`,
+    `<note>用户此刻的光标在第 ${c.line} 行 —— 这只是"他在看哪儿"，`,
+    `**不代表他问的就是这一行**。不要硬往这一行上凑结论；`,
+    `他问的是别的行就以他问的那行为准。</note>`,
+    text.trim() ? `<line>${text}</line>` : "",
+    `</cursor>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** 判题结果（提交）+ 运行结果（示例用例） */
 export function buildJudgeBlock(req: ChatRequest): string {
   const parts: string[] = [];
@@ -183,7 +207,10 @@ export function buildCodeHistoryBlock(req: ChatRequest): string | null {
  * **只放在最后一条 user 消息里**，绝不放到 system 或历史前面。
  */
 export function buildVolatileBlock(req: ChatRequest, render: CodeRender): string {
-  const parts = [buildCodeBlock(render), buildJudgeBlock(req)];
+  const parts = [buildCodeBlock(render)];
+  const cursor = buildCursorBlock(req);
+  if (cursor) parts.push(cursor);
+  parts.push(buildJudgeBlock(req));
   const hist = buildCodeHistoryBlock(req);
   if (hist) parts.push(hist);
   return parts.join("\n\n");

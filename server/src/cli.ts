@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMessagesForReview } from "./context.ts";
+import { loadSystemPrompt } from "./prompt.ts";
 import { resetCodeMemory } from "./code-version.ts";
 import { resetTurnMemory } from "./turn-memory.ts";
 import { planPrompt, planSummary } from "./prompt-plan.ts";
@@ -43,7 +44,7 @@ if (req.problem?.content && /<[a-z][\s\S]*>/i.test(req.problem.content)) {
   req.problem.content = htmlToMarkdown(req.problem.content);
 }
 
-const systemPrompt = readFileSync(resolve(HERE, "prompts/system.md"), "utf8");
+const systemPrompt = loadSystemPrompt();
 
 /**
  * --dry-run 时反复演练"多轮"：每轮模拟用户改一行 + 问一句，

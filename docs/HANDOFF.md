@@ -84,6 +84,8 @@ Node 24 自带 `node:sqlite` 和 TS 直跑，所以：**没有 package.json 依�
 | `scroll.mjs` | **滚动跟随回归**：贴底才跟随 / 往上滚不被拽走 / `anchor()` 停在回答开头 / 真滚轮能停住。后端用假流式回复，**不花 API 额度、不碰账号** |
 | `selfcheck.mjs` | **不开浏览器**，只对"生成出来要注入页面的代码"跑 `node --check`（★44 就是它守的坑） |
 | `prompts/archive/` | **改 `system.md` 之前先把当前版复制进去**（`system.v<版本>.md`）。prompt 是最该当「代码」对待的东西，而它的效果没法靠单测验证 —— 只能靠「上一版长什么样」来对照 |
+| `server/src/prompt.ts` | system prompt 的加载 + **热重载**（按 mtime 缓存）。改 prompt **不用重启后端**了 |
+| `server/test/http.ts` | **HTTP 集成测试**：真起服务 + 打桩上游 LLM。★49/★50 那一类「单测全绿、真跑就炸」就是它守的 |
 | `scroll.mjs` 同级还有 `server/test/diff.ts` / `prompt-order.ts` | 见下面 server 那一节 |
 
 ---
@@ -252,6 +254,7 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
 | **★36/★41** | 测试环境里 `addScriptToEvaluateOnNewDocument` 注入到**所有 frame**、且每个新 document 都跑 → content.js 跑出**多个面板实例**，文档级监听器互相干扰，UI 断言飘忽。**真实扩展一个 document 只注入一次** | 遇到这种就**立刻停手**，把确定性覆盖放到 Node 单测；别在浏览器 harness 上无限投入（我在上面浪费了很久） |
 | **★37** | FTS5 的 `unicode61` 把连续中文当成**一个 token**，搜「边界」命中 0 条 | 中文检索用 `LIKE` |
 | **★42/★43** | 流式时**每来一个 token 就把用户拽回底部**（用户原话「我还往上翻不了」）；改完静态检查全绿，但 `anchor()` 自己写 `scrollTop` 触发的 `scroll` 事件又把跟随打开了 —— **只有真浏览器跑出来才知道** | 贴底才跟随；并且把"代码滚的"和"用户滚的"分开（`selfScrollTop`）。**几何判断分不清意图，得额外记账** |
+| **★51** | 三个新调试端点被**塞进了 `/debug/last-prompt` 的 if 分支里** → 永远是死代码，`node --check` 照过 | 新加的 HTTP 集成测试第一次跑就红了。**路由是平铺的，别在 A 路由的分支里判断 B 路由** |
 | **★45/★46/★47** | **前缀缓存**：易变块放在 system 里 → 改一行代码废掉整段历史（实测命中被钉死在 1664，未命中涨到 2629）；想省 token 改发增量，又发现**历史是从客户端"原话"重建的，上一轮的代码块整块消失**，模型只能猜代码；顺手的版本号推进还会被 `buildMessages` 的两次调用推进两遍 | ① 排布改成 `[提示词+题干][历史][易变块+问题]` ② `turn-memory` 把上一轮实际发出去的文本记下来原样复用，prompt 变 append-only，对不上就退回全文 ③ `planPrompt` 算一次、`commit()` 只在首字节后显式调 |
 | **★49** | 改动顺序时把 `cr` 用在了声明之前 → TDZ 500，**单测全绿照样挂**（单测不跑 HTTP 处理器） | 每次都真的起后端跑一轮；别只跑单测 |
 | **★44** | 模板字符串里写 `\n` / `\u0000` 会**在生成脚本时就被解码**，注入的源码里出现真换行/真 NUL → 语法错误。**这次又踩了**：桩代码整段没跑，`ui-wiring` 10 条全红，看起来像扩展坏了 | 探测脚本里要写成 `\\n`；并且用 `tools/probe/selfcheck.mjs` 把"生成出来的注入代码"当独立文件 `node --check` 一遍 |
@@ -263,6 +266,24 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
 ---
 
 ## 10. 下一步该做什么
+
+### 一条命令跑全部
+
+```bash
+node tools/probe/selfcheck.mjs          # 静态自检（最快，先跑这个）
+node server/test/diff.ts                # 行级 diff（含往返校验）
+node server/test/prompt-order.ts        # ★ prompt 前缀逐字节稳定
+node server/test/http.ts                # ★ 真起服务 + 打桩 LLM（★49/★50 靠它）
+MEMORY_DB=./.tmp/t.db node server/test/history.ts
+node server/test/smoke.ts
+node extension/test/wiring.test.mjs
+node extension/test/markdown.test.mjs
+node extension/test/background.test.mjs
+```
+
+改 prompt 的验收方式：直接跑一次 `node server/src/cli.ts <fixture>`（**不用重启**，
+热重载会读到新版），或者拿「无 judge 无 run + 半成品代码」的 fixture 各跑两次对照
+（v0.8.1 就是这么验的）。
 
 ### 立刻
 
@@ -277,6 +298,16 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
    会不会难受 —— 这是几何决定的（回答在内容末尾，视口滚不过末尾），
    如果用户觉得难受，唯一的解法是给 `.body` 加"流式期间才有的底部留白"，
    但那会在收尾时动到滚动位置，要小心
+
+### v0.9.0 刚做完的（2026-10-13）
+
+- prompt **热重载** —— 改 prompt 不用重启后端
+- **光标行**进上下文（`<cursor line="7">`）：用户的核心用法是「看着半成品代码卡在某一行」。
+  ⚠️ 真页面验过：Monaco `getEditors()[0].getPosition()` + `getLineContent()` 可用，
+  **缩进保留**；prompt 里明确写了「不代表他问的就是这一行」
+- 侧边栏**显示本轮用量**（入 / 出 / 缓存命中率 / 等效全价 token）
+- **HTTP 集成测试**（36 项）：真起服务 + 打桩上游 LLM
+- 顺手修掉我自己埋的两个洞：★50（CLI 漏传 render）、★51（调试端点是死代码）
 
 ### 里程碑上真正欠的两笔（比继续优化更要紧）
 

@@ -105,7 +105,10 @@ let thinking = 0;
 let t0 = Date.now();
 let firstByte: number | null = null;
 try {
-  for await (const chunk of streamChat(req, systemPrompt)) {
+  // ★ 跟服务端走同一条路：算计划 → 传下去。（不传的话 buildMessages 只能兜底发全文）
+  const plan = planPrompt({ ...req, sessionId: "cli" }, systemPrompt);
+  console.log(`  代码发送方式: ${planSummary(plan, { ...req, sessionId: "cli" })}\n`);
+  for await (const chunk of streamChat(req, systemPrompt, { codeRender: plan.render, userTexts: plan.texts })) {
     if (firstByte === null) firstByte = Date.now() - t0;
     if (chunk.kind === "usage") {
       const u = chunk.usage;

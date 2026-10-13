@@ -66,6 +66,27 @@ export function normalizeCode(code: string): string {
   return (code ?? "").replace(/\r\n?/g, "\n");
 }
 
+/**
+ * 兜底：没有"计划"时一律按全文渲染。
+ *
+ * ★ 存在理由：v0.8 把 `buildMessages` 的 render 改成必填之后，`cli.ts` 的真实调用
+ *   路径忘了传 → 整个 CLI 喂题直接崩（`Cannot read properties of undefined`），
+ *   而**所有单测都没有调用 streamChat，所以全绿**。这个兜底让"漏传"最多退化成
+ *   "多发点 token"，而不是崩掉。真接口跑一遍才发现。
+ */
+export function fallbackRender(code: string, lang: string): CodeRender {
+  const norm = normalizeCode(code);
+  return {
+    rev: 0,
+    mode: "full",
+    diffFrom: null,
+    lang: lang || "unknown",
+    body: norm,
+    reason: "没有版本计划，按全文渲染",
+    stats: { fullChars: norm.length, sentChars: norm.length, added: 0, removed: 0, ratio: 1 },
+  };
+}
+
 /** 只看不改：给测试/调试用 */
 export function peekVersion(sessionId: string): Version | null {
   return versions.get(sessionId) ?? null;

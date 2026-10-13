@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.8.0";
+  const VER = "0.8.1";
 
   /**
    * ★ nonce 不能从 window 读！

@@ -19,7 +19,7 @@
  */
 
 import type { ChatMessage, ChatRequest } from "./types.ts";
-import type { CodeRender } from "./code-version.ts";
+import { fallbackRender, type CodeRender } from "./code-version.ts";
 
 /** 失败用例输入超过这个长度就截断（力扣隐藏用例可能上万字符） */
 const TESTCASE_MAX = 2000;
@@ -217,12 +217,14 @@ function lastUserContent(req: ChatRequest): string | null {
 export function buildMessages(
   req: ChatRequest,
   systemPrompt: string,
-  render: CodeRender,
+  render?: CodeRender,
   userTexts: (string | null)[] = []
 ): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  // 漏传就退化成全文，绝不崩（见 fallbackRender 的注释）
+  const r = render ?? fallbackRender(req.code ?? "", req.lang ?? "");
   const stable = buildStableBlock(req);
-  const volatile = `<context>\n${buildVolatileBlock(req, render)}\n</context>`;
-  const turnText = currentTurnText(req, render);
+  const volatile = `<context>\n${buildVolatileBlock(req, r)}\n</context>`;
+  const turnText = currentTurnText(req, r);
 
   const history: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
   let ui = 0;

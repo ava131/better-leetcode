@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.10.0";
+  const VER = "0.10.1";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -292,6 +292,31 @@
 .prompt .pbar button.psave { border-color: #2563eb; color: #1d4ed8; background: #eff6ff; }
 .prompt .pbar button.prestore { border-color: #c2410c; color: #c2410c; background: #fff7ed; }
 .prompt .pbar button[hidden] { display: none; }
+/* 只读时渲染成 markdown（跟聊天回答一个观感）；编辑时才露出 textarea */
+.prompt .pmd { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 2px 14px 10px;
+  font-size: 12px; line-height: 1.6; color: #111827; word-break: break-word; }
+.prompt .pmd[hidden] { display: none; }
+.prompt .pmd h1, .prompt .pmd h2, .prompt .pmd h3, .prompt .pmd h4 {
+  margin: 12px 0 5px; font-size: 13px; font-weight: 700; line-height: 1.35; }
+.prompt .pmd h1 { font-size: 15px; } .prompt .pmd h2 { font-size: 14px; }
+.prompt .pmd p { margin: 0 0 7px; }
+.prompt .pmd ul, .prompt .pmd ol { margin: 5px 0 8px; padding-left: 20px; }
+.prompt .pmd li { margin: 2px 0; } .prompt .pmd ul li { list-style: disc; } .prompt .pmd ol li { list-style: decimal; }
+.prompt .pmd blockquote { margin: 6px 0; padding: 2px 0 2px 9px; border-left: 3px solid #c7d2fe; color: #6b7280; }
+.prompt .pmd blockquote p { margin: 0; }
+.prompt .pmd hr { border: none; border-top: 1px solid #e5e7eb; margin: 9px 0; }
+.prompt .pmd strong { font-weight: 700; }
+.prompt .pmd code { background: #eef2ff; padding: 1px 4px; border-radius: 3px;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.prompt .pmd pre { background: #0f172a; color: #e2e8f0; padding: 7px 9px; border-radius: 6px;
+  overflow-x: auto; margin: 6px 0; font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px; line-height: 1.5; position: relative; }
+.prompt .pmd pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.prompt .pmd pre[data-lang]:not([data-lang=""])::before {
+  content: attr(data-lang); position: absolute; top: 3px; right: 7px; font-size: 9px; color: #64748b; }
+.prompt .pmd table { border-collapse: collapse; margin: 6px 0; font-size: 11px; width: 100%; }
+.prompt .pmd th, .prompt .pmd td { border: 1px solid #e5e7eb; padding: 3px 5px; text-align: left; }
+.prompt .pmd th { background: #f3f4f6; font-weight: 600; }
 .prompt .ptext { flex: 1 1 auto; min-height: 0; resize: none; border: 1px solid #e5e7eb;
   border-radius: 6px; margin: 0 10px; padding: 8px; font-family: ui-monospace, Menlo, monospace;
   font-size: 11px; line-height: 1.5; color: #111827; background: #f9fafb; outline: none; }
@@ -301,6 +326,11 @@
 @media (prefers-color-scheme: dark) {
   .prompt .pbar select, .prompt .pbar button { background: #111827; border-color: #374151; color: #e5e7eb; }
   .prompt .ptext { background: #0b1220; color: #e5e7eb; border-color: #374151; }
+  .prompt .pmd { color: #e5e7eb; }
+  .prompt .pmd code { background: #111827; color: #c7d2fe; }
+  .prompt .pmd th, .prompt .pmd td { border-color: #4b5563; }
+  .prompt .pmd th { background: #111827; }
+  .prompt .pmd hr { border-top-color: #4b5563; }
 }
 
 .body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
@@ -356,6 +386,9 @@
 .msg.assistant .content:empty { display: none; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; flex: 0 0 auto; }
+/* ★ 类选择器里的 display 会盖掉浏览器默认的 [hidden]{display:none}，
+   所以凡是"用 hidden 属性控制显隐"的元素都得显式写一条 */
+.chips[hidden], .ft[hidden] { display: none; }
 .chip { border: 1px solid #d1d5db; background: #fff; color: #374151; border-radius: 999px;
   padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .chip:hover { background: #f3f4f6; }
@@ -408,7 +441,7 @@
         <select class="model" title="切换模型"></select>
         <button data-act="pin" title="点力扣界面时收起">⇤</button>
         <button data-act="clear" title="清空对话">⟲</button>
-        <button data-act="prompt" title="查看 / 修改 system prompt（默认锁住）">SYS</button>
+        <button data-act="prompt" title="查看 / 修改 system prompt（默认锁住）">≡</button>
         <button data-act="collapse" title="收起">—</button>
       </div>
       <div class="status gray"></div>
@@ -426,6 +459,7 @@
           <button class="pcancel" hidden>取消</button>
           <button class="prestore" hidden>恢复这一版</button>
         </div>
+        <div class="pmd" hidden></div>
         <textarea class="ptext" readonly spellcheck="false"></textarea>
         <div class="pstat"></div>
       </div>
@@ -1273,6 +1307,7 @@
         save: promptEl.querySelector(".psave"),
         cancel: promptEl.querySelector(".pcancel"),
         restore: promptEl.querySelector(".prestore"),
+        md: promptEl.querySelector(".pmd"),
         text: promptEl.querySelector(".ptext"),
         stat: promptEl.querySelector(".pstat"),
       };
@@ -1287,19 +1322,35 @@
     d.stat.classList.toggle("err", !!isErr);
   }
 
-  /** 把"当前是哪一档"反映到按钮上：看历史版本时只能恢复，不能编辑 */
+  /**
+   * 把"当前是哪一档"反映到界面：看历史版本时只能恢复，不能编辑。
+   *
+   * ★ 只读 → 渲染成 markdown（跟聊天回答一个观感）；编辑 → 露出原文的 textarea。
+   *   prompt 本身是 markdown（标题/列表/代码块），纯文本看着很难读。
+   */
   function applyPromptMode() {
     const d = promptDom();
     if (!d) return;
     const P = S.prompt;
     const ro = !P.editing;
+    const shown = P.draft != null ? P.draft : P.text;
+
     d.text.readOnly = ro;
+    d.text.value = shown; // 一直保持同步：切到编辑态时直接就是这份内容
+    d.text.hidden = ro;
+    if (d.md) {
+      d.md.hidden = !ro;
+      if (ro) {
+        d.md.innerHTML = md(shown || ""); // md() 内部已转义，不会注入
+        d.md.scrollTop = 0;
+      }
+    }
+
     d.edit.hidden = !ro || !!P.viewing;
     d.save.hidden = !P.editing;
     d.cancel.hidden = !P.editing;
     d.restore.hidden = !P.viewing;
     d.ver.disabled = P.editing;
-    d.text.value = P.draft != null ? P.draft : P.text;
   }
 
   function renderPromptVersions(list) {

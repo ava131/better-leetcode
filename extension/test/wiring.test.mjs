@@ -225,7 +225,13 @@ console.log("\n=== 12) 光标行 + 本轮用量 ===");
   check("done 里会取 usage", /if \(m\.usage\) S\.lastUsage/.test(SRC));
   check("有渲染用量的函数", SRC.includes("function renderUsage"));
   check("HTML 里有 .usage 容器", SRC.includes('class="usage"') && SRC.includes("usageEl = root.querySelector"));
-  check("用量里给出缓存命中率", SRC.includes("prompt_cache_hit_tokens") && SRC.includes("缓存 <b>"));
+  check("用量里给出缓存命中率", SRC.includes("prompt_cache_hit_tokens"));
+  // 用户实机看到的是 `缓存 <b>83%</b>` —— 因为之前把 HTML 塞进了 textContent。
+  check(
+    "用量是用 DOM 节点拼的（不是把 HTML 当文本塞进去）",
+    /function renderUsage[\s\S]{0,2500}?appendChild/.test(SRC) && !SRC.includes("usageEl.textContent = parts.join"),
+    "renderUsage 里得用 createElement/appendChild"
+  );
 }
 
 console.log("\n=== 13) 版本号别跟 manifest 走散 ===");

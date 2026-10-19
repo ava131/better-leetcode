@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.9.0";
+  const VER = "0.9.1";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -275,7 +275,8 @@
 .usage { flex: 0 0 auto; padding: 0 12px 4px; font-size: 10px; color: #9ca3af;
   text-align: right; font-family: ui-monospace, Menlo, monospace; cursor: default; }
 .usage[hidden] { display: none; }
-.usage b { color: #6b7280; font-weight: 600; }
+.usage .hi { color: #4b5563; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .usage .hi { color: #d1d5db; } }
 
 .body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .body[hidden] { display: none; }
@@ -1219,18 +1220,33 @@
       usageEl.hidden = true;
       return;
     }
-    const fmt = (n) => (n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n ?? 0));
+    const fmt = (n) => {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return "?";
+      return v >= 1000 ? (v / 1000).toFixed(1) + "k" : String(Math.round(v));
+    };
     const hit = u.prompt_cache_hit_tokens;
     const miss = u.prompt_cache_miss_tokens;
-    const parts = [`入 ${fmt(u.prompt_tokens)}`, `出 ${fmt(u.completion_tokens)}`];
+
+    // ★ 一段一段建 DOM 节点，绝不用 textContent 塞 HTML ——
+    //   之前写成 textContent = "缓存 <b>83%</b>"，页面上就原样显示出了标签。
+    //   这里所有数字都过 Number()，没有拼接任何用户/模型文本，所以也不存在注入面。
+    usageEl.textContent = "";
+    const seg = (text, hi) => {
+      const el = document.createElement("span");
+      if (hi) el.className = "hi";
+      el.textContent = text;
+      usageEl.appendChild(el);
+    };
+    seg(`入 ${fmt(u.prompt_tokens)} · 出 ${fmt(u.completion_tokens)}`);
     if (hit != null && miss != null) {
-      const pct = Math.round((hit / Math.max(1, hit + miss)) * 100);
-      parts.push(`缓存 <b>${pct}%</b>`);
+      const pct = Math.round((Number(hit) / Math.max(1, Number(hit) + Number(miss))) * 100);
+      seg(" · 缓存 ");
+      seg(`${pct}%`, true);
       // 等效全价：未命中 1 份 + 命中 0.1 份
-      parts.push(`≈${fmt(Math.round(miss + hit * 0.1))}`);
+      seg(` · ≈${fmt(Number(miss) + Number(hit) * 0.1)}`);
     }
-    if (u.ms) parts.push(`${(u.ms / 1000).toFixed(1)}s`);
-    usageEl.textContent = parts.join(" · ");
+    if (u.ms) seg(` · ${(Number(u.ms) / 1000).toFixed(1)}s`);
     usageEl.title =
       `本轮 token 用量\n` +
       `输入 ${u.prompt_tokens ?? "?"}（缓存命中 ${hit ?? "?"} / 未命中 ${miss ?? "?"}）\n` +

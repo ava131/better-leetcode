@@ -256,15 +256,42 @@ try {
     check("prompt 里能找到基准（rev 1 的全文）", all.includes('<code rev="1"'), "找不到基准就说明链条断了");
   }
 
+  console.log("\n=== 4.5) 点了「运行」的状态必须进 prompt（否则会被当成'还在自己写'）===");
+  {
+    // 用户报的那个"什么都不给"：其实就是这句没送到，模型就一直以为他还在自己写。
+    const turn3 = await chat(
+      [
+        { role: "user", content: "我卡住了" },
+        { role: "assistant", content: "（回答）" },
+        { role: "user", content: "改了还是不对" },
+        { role: "assistant", content: "（回答）" },
+        { role: "user", content: "现在又有什么问题" },
+      ],
+      code2,
+      {
+        run: {
+          verdict: "Memory Limit Exceeded", passed: 0, total: 0, failedIndex: null,
+          compareResult: "", answers: [], expected: [], dataInput: "[1,2,3]", runtime: "N/A", memory: "N/A",
+        },
+      }
+    );
+    check("第三轮 200", turn3.status === 200, turn3.status);
+    const last = String((stub.last()?.messages ?? []).slice(-1)[0]?.content ?? "");
+    check("★ <run> 块进了本轮上下文", last.includes("<run verdict="), last.slice(0, 300));
+    check("★ run 的判定也在（MLE）", last.includes("Memory Limit Exceeded"), last.slice(0, 400));
+    check("没提交时 judge 明确说「尚未提交」（两条信息不冲突）", last.includes("尚未提交"), last.slice(0, 400));
+  }
+
   console.log("\n=== 5) 调试端点 ===");
   {
     const cm = await (await fetch(`${base}/debug/code-memory`)).json();
     check("代码版本账本记到 rev 2", cm?.items?.[0]?.rev === 2, cm);
     const tm = await (await fetch(`${base}/debug/turn-memory`)).json();
-    check("逐轮记忆记到 2 轮", tm?.items?.[0]?.turns === 2, tm);
+    // 上面一共问了 3 轮（第 3 轮代码没改，所以 rev 还是 2）
+    check("逐轮记忆记到 3 轮", tm?.items?.[0]?.turns === 3, tm);
     const lp = await (await fetch(`${base}/debug/last-prompt`)).text();
     check("/debug/last-prompt 能看完整 prompt", lp.includes("MESSAGES") && lp.includes("<context>"), lp.slice(0, 120));
-    check("/debug/last-prompt 标了 rev/模式", /代码 rev=2 模式=diff/.test(lp), lp.split("\n")[0]);
+    check("/debug/last-prompt 标了 rev/模式", /代码 rev=2 模式=(diff|same)/.test(lp), lp.split("\n")[0]);
   }
 
   console.log("\n=== 6) CLI 真实调用不再崩（★50 就是这条抓出来的）===");

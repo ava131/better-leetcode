@@ -254,6 +254,7 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
 | **★36/★41** | 测试环境里 `addScriptToEvaluateOnNewDocument` 注入到**所有 frame**、且每个新 document 都跑 → content.js 跑出**多个面板实例**，文档级监听器互相干扰，UI 断言飘忽。**真实扩展一个 document 只注入一次** | 遇到这种就**立刻停手**，把确定性覆盖放到 Node 单测；别在浏览器 harness 上无限投入（我在上面浪费了很久） |
 | **★37** | FTS5 的 `unicode61` 把连续中文当成**一个 token**，搜「边界」命中 0 条 | 中文检索用 `LIKE` |
 | **★42/★43** | 流式时**每来一个 token 就把用户拽回底部**（用户原话「我还往上翻不了」）；改完静态检查全绿，但 `anchor()` 自己写 `scrollTop` 触发的 `scroll` 事件又把跟随打开了 —— **只有真浏览器跑出来才知道** | 贴底才跟随；并且把"代码滚的"和"用户滚的"分开（`selfScrollTop`）。**几何判断分不清意图，得额外记账** |
+| **★52** | prompt 的「无条件总纲」盖掉了「带条件的细则」→ 用户运行挂了（MLE）还在只报行号，他说「什么都不给」 | 状态判断必须写在**最开头**；验收用真复刻 fixture 做 A/B（§7 有命令） |
 | **★51** | 三个新调试端点被**塞进了 `/debug/last-prompt` 的 if 分支里** → 永远是死代码，`node --check` 照过 | 新加的 HTTP 集成测试第一次跑就红了。**路由是平铺的，别在 A 路由的分支里判断 B 路由** |
 | **★45/★46/★47** | **前缀缓存**：易变块放在 system 里 → 改一行代码废掉整段历史（实测命中被钉死在 1664，未命中涨到 2629）；想省 token 改发增量，又发现**历史是从客户端"原话"重建的，上一轮的代码块整块消失**，模型只能猜代码；顺手的版本号推进还会被 `buildMessages` 的两次调用推进两遍 | ① 排布改成 `[提示词+题干][历史][易变块+问题]` ② `turn-memory` 把上一轮实际发出去的文本记下来原样复用，prompt 变 append-only，对不上就退回全文 ③ `planPrompt` 算一次、`commit()` 只在首字节后显式调 |
 | **★49** | 改动顺序时把 `cr` 用在了声明之前 → TDZ 500，**单测全绿照样挂**（单测不跑 HTTP 处理器） | 每次都真的起后端跑一轮；别只跑单测 |
@@ -281,9 +282,25 @@ node extension/test/markdown.test.mjs
 node extension/test/background.test.mjs
 ```
 
-改 prompt 的验收方式：直接跑一次 `node server/src/cli.ts <fixture>`（**不用重启**，
-热重载会读到新版），或者拿「无 judge 无 run + 半成品代码」的 fixture 各跑两次对照
-（v0.8.1 就是这么验的）。
+改 prompt 的验收方式（**别凭感觉，也别只看一次**）：
+
+```bash
+# 1) 用真事复刻 fixture：从 /debug/last-prompt 把上一次真实请求抄回来
+curl -s localhost:8787/debug/last-prompt > /tmp/lastp.txt
+#    然后按 题干 / <code> / <run> / 消息 拼成 fixture（v0.9.1 的 /tmp/fx-A.json 就是这么来的）
+# 2) 每个 prompt 各跑两次（模型有随机性，一次说明不了问题）
+LLM_MODEL=deepseek-flash node server/src/cli.ts /tmp/fx-A.json
+```
+
+**至少准备两组对照组**，否则一修就过头：
+
+| 对照组 | 期望 |
+|---|---|
+| 运行过/提交过（有 `<run>`/`<judge>`）+「现在又有什么问题」 | **要给完整可抄的代码** |
+| 未提交未运行 +「我不知道 val 该怎么递归的传了」 | **不许贴完整解**（v0.8.1 的行为） |
+
+v0.9.1 的实测：旧 prompt 复盘组 **0/2** 给完整代码；新 prompt 复盘组 **4/4**，
+未提交组 **0/2**。
 
 ### 立刻
 
@@ -308,6 +325,12 @@ node extension/test/background.test.mjs
 - 侧边栏**显示本轮用量**（入 / 出 / 缓存命中率 / 等效全价 token）
 - **HTTP 集成测试**（36 项）：真起服务 + 打桩上游 LLM
 - 顺手修掉我自己埋的两个洞：★50（CLI 漏传 render）、★51（调试端点是死代码）
+
+### v0.9.1（2026-10-19）
+
+- **修「运行过也不给代码」**（★52）：把"状态判断"提到 prompt 总纲，复盘阶段明确要求给完整代码
+- **修用量显示**：`缓存 <b>83%</b>` 原样显示 —— 因为把 HTML 塞进了 `textContent`，改成用 DOM 节点拼
+- 归档 `archive/system.v0.9.0.md`（这次是**先复制再改**的）
 
 ### 里程碑上真正欠的两笔（比继续优化更要紧）
 

@@ -11,7 +11,7 @@
 
   const TAG = "__better_leetcode__";
   /** 版本号显示在标题旁 —— 用来确认扩展到底有没有重新加载 */
-  const VER = "0.9.1";
+  const VER = "0.10.0";
 
   /**
    * ★ nonce 不能从 window 读！
@@ -45,6 +45,8 @@
     codeHistory: [],
     cursor: null,
     lastUsage: null,
+    // system prompt 视图：viewing=正在看的历史版本名（null=当前）；draft=没保存的草稿
+    prompt: { text: "", viewing: null, draft: null, editing: false },
     messages: [], // 只放"说过的话" + system 标记
     collapsed: false,
     backendOk: false,
@@ -278,6 +280,29 @@
 .usage .hi { color: #4b5563; font-weight: 600; }
 @media (prefers-color-scheme: dark) { .usage .hi { color: #d1d5db; } }
 
+/* system prompt 查看/编辑 —— 默认锁住，要改得先点「编辑」 */
+.prompt { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.prompt[hidden] { display: none; }
+.prompt .pbar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px; flex: 0 0 auto; }
+.prompt .pbar select { flex: 1 1 auto; min-width: 0; font-size: 11px; font-family: inherit;
+  border: 1px solid #d1d5db; border-radius: 5px; padding: 2px 4px; background: #fff; color: #374151; }
+.prompt .pbar button { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 5px;
+  border: 1px solid #d1d5db; background: #fff; color: #374151; cursor: pointer; }
+.prompt .pbar button:hover { background: #f3f4f6; }
+.prompt .pbar button.psave { border-color: #2563eb; color: #1d4ed8; background: #eff6ff; }
+.prompt .pbar button.prestore { border-color: #c2410c; color: #c2410c; background: #fff7ed; }
+.prompt .pbar button[hidden] { display: none; }
+.prompt .ptext { flex: 1 1 auto; min-height: 0; resize: none; border: 1px solid #e5e7eb;
+  border-radius: 6px; margin: 0 10px; padding: 8px; font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px; line-height: 1.5; color: #111827; background: #f9fafb; outline: none; }
+.prompt .ptext:not([readonly]) { background: #fff; border-color: #93c5fd; }
+.prompt .pstat { flex: 0 0 auto; padding: 4px 12px 8px; font-size: 10px; color: #6b7280; }
+.prompt .pstat.err { color: #b91c1c; }
+@media (prefers-color-scheme: dark) {
+  .prompt .pbar select, .prompt .pbar button { background: #111827; border-color: #374151; color: #e5e7eb; }
+  .prompt .ptext { background: #0b1220; color: #e5e7eb; border-color: #374151; }
+}
+
 .body { flex: 1 1 auto; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .body[hidden] { display: none; }
 .body:empty::after { content: "问点什么。题干和代码已经在我手里了。"; color: #9ca3af; font-size: 12px; }
@@ -350,7 +375,7 @@
 @media (prefers-color-scheme: dark) { .msg.assistant .note { border-top-color: #4b5563; } }
 `;
 
-  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl, jumpEl, usageEl;
+  let root, host, wrap, ball, statusEl, bodyEl, chipsEl, inputEl, sendEl, modelEl, pinEl, tabsEl, histEl, jumpEl, usageEl, promptEl;
 
   /** 小球的形象图。拿不到 URL 就退回文字标（测试环境里 chrome.runtime 可能是 stub） */
   let PET = "";
@@ -383,6 +408,7 @@
         <select class="model" title="切换模型"></select>
         <button data-act="pin" title="点力扣界面时收起">⇤</button>
         <button data-act="clear" title="清空对话">⟲</button>
+        <button data-act="prompt" title="查看 / 修改 system prompt（默认锁住）">SYS</button>
         <button data-act="collapse" title="收起">—</button>
       </div>
       <div class="status gray"></div>
@@ -392,6 +418,17 @@
       </div>
       <div class="body"></div>
       <div class="hist" hidden></div>
+      <div class="prompt" hidden>
+        <div class="pbar">
+          <select class="pver" title="切到某个历史版本（只读预览）"></select>
+          <button class="pedit">编辑</button>
+          <button class="psave" hidden>保存</button>
+          <button class="pcancel" hidden>取消</button>
+          <button class="prestore" hidden>恢复这一版</button>
+        </div>
+        <textarea class="ptext" readonly spellcheck="false"></textarea>
+        <div class="pstat"></div>
+      </div>
       <div class="chips"></div>
       <div class="usage" hidden></div>
       <div class="ft">
@@ -424,6 +461,7 @@
     sendEl = root.querySelector(".send");
     jumpEl = root.querySelector(".jump");
     usageEl = root.querySelector(".usage");
+    promptEl = root.querySelector(".prompt");
     if (bodyEl) {
       bodyEl.addEventListener("scroll", () => {
         // 代码自己滚出来的 scroll 事件不代表用户意图，丢掉
@@ -556,6 +594,11 @@
       say("system", `已切到 ${S.model}（下一轮生效）`);
     });
 
+    root.querySelector('[data-act="prompt"]').onclick = () => {
+      if (S.promptOpen) closePromptView();
+      else openPromptView();
+    };
+    bindPromptView();
     root.querySelector('[data-act="collapse"]').onclick = () => setCollapsed(true);
     root.querySelector('[data-act="clear"]').onclick = () => {
       S.messages = [];
@@ -820,10 +863,15 @@
 
   function switchTab(tab) {
     S.tab = tab;
+    if (promptEl && !promptEl.hidden) promptEl.hidden = true; // 切 tab 就离开 prompt 视图
+    S.promptOpen = false;
+    const ft = promptEl && promptEl.parentElement ? promptEl.parentElement.querySelector(".ft") : null;
+    if (ft) ft.hidden = false;
     if (bodyEl) bodyEl.hidden = tab !== "chat";
     if (histEl) histEl.hidden = tab !== "history";
     if (chipsEl) chipsEl.hidden = tab !== "chat";
     renderTabs();
+    renderUsage(); // 从 prompt 视图切回来时恢复用量行
     if (tab === "history") renderHistory();
   }
 
@@ -1206,6 +1254,193 @@
           d.textContent = msg;
         }
       },
+    };
+  }
+
+  // ─────────── system prompt：看 / 改 / 回滚 ───────────
+  //
+  // 默认**锁住**（readonly）。点「编辑」才解锁，改完点「保存」——
+  // 后端是热重载的，所以**保存完下一轮就生效，不用重启后端、也不用刷新扩展**。
+  // 每次保存/恢复之前，后端会先把当前这份自动归档，所以手滑了总能退回来。
+
+  let pEls = null;
+  function promptDom() {
+    if (!promptEl) return null;
+    if (!pEls) {
+      pEls = {
+        ver: promptEl.querySelector(".pver"),
+        edit: promptEl.querySelector(".pedit"),
+        save: promptEl.querySelector(".psave"),
+        cancel: promptEl.querySelector(".pcancel"),
+        restore: promptEl.querySelector(".prestore"),
+        text: promptEl.querySelector(".ptext"),
+        stat: promptEl.querySelector(".pstat"),
+      };
+    }
+    return pEls;
+  }
+
+  function pstat(msg, isErr) {
+    const d = promptDom();
+    if (!d) return;
+    d.stat.textContent = msg || "";
+    d.stat.classList.toggle("err", !!isErr);
+  }
+
+  /** 把"当前是哪一档"反映到按钮上：看历史版本时只能恢复，不能编辑 */
+  function applyPromptMode() {
+    const d = promptDom();
+    if (!d) return;
+    const P = S.prompt;
+    const ro = !P.editing;
+    d.text.readOnly = ro;
+    d.edit.hidden = !ro || !!P.viewing;
+    d.save.hidden = !P.editing;
+    d.cancel.hidden = !P.editing;
+    d.restore.hidden = !P.viewing;
+    d.ver.disabled = P.editing;
+    d.text.value = P.draft != null ? P.draft : P.text;
+  }
+
+  function renderPromptVersions(list) {
+    const d = promptDom();
+    if (!d) return;
+    const cur = S.prompt.viewing;
+    d.ver.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "当前版本";
+    d.ver.appendChild(opt0);
+    for (const v of list || []) {
+      const o = document.createElement("option");
+      o.value = v.name;
+      const when = new Date(v.mtimeMs).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+      o.textContent = `${v.kind === "milestone" ? "★ " : ""}${v.name.replace(/^system\.|\.md$/g, "").replace(/^edited-/, "")} · ${v.chars}字 · ${when}`;
+      d.ver.appendChild(o);
+    }
+    d.ver.value = cur || "";
+  }
+
+  async function loadPromptCurrent(note) {
+    const d = promptDom();
+    if (!d) return;
+    pstat("读取中…");
+    try {
+      const r = await chrome.runtime.sendMessage({ type: "promptGet" });
+      if (!r?.ok) throw new Error(r?.error || "读不到 prompt");
+      S.prompt.text = r.text || "";
+      S.prompt.viewing = null;
+      S.prompt.draft = null;
+      S.prompt.editing = false;
+      renderPromptVersions(r.versions);
+      applyPromptMode();
+      pstat(note || `当前版本 · ${r.chars} 字符 · 只读（点「编辑」才能改）`);
+    } catch (e) {
+      pstat("✗ " + e.message, true);
+    }
+  }
+
+  async function openPromptView() {
+    if (!promptEl) return;
+    // 从对话/历史切过来
+    if (bodyEl) bodyEl.hidden = true;
+    if (histEl) histEl.hidden = true;
+    if (chipsEl) chipsEl.hidden = true;
+    if (usageEl) usageEl.hidden = true; // prompt 视图里不显示用量，切回去再恢复
+    const ft = promptEl.parentElement?.querySelector(".ft");
+    promptEl.hidden = false;
+    if (ft) ft.hidden = true;
+    S.promptOpen = true;
+    if (!S.prompt.text) await loadPromptCurrent();
+    else {
+      applyPromptMode();
+      pstat(`当前版本 · ${S.prompt.text.length} 字符 · 只读（点「编辑」才能改）`);
+    }
+  }
+
+  function closePromptView() {
+    if (!promptEl) return;
+    promptEl.hidden = true;
+    S.promptOpen = false;
+    const ft = promptEl.parentElement?.querySelector(".ft");
+    if (ft) ft.hidden = false;
+    switchTab(S.tab || "chat");
+  }
+
+  function bindPromptView() {
+    const d = promptDom();
+    if (!d) return;
+
+    d.edit.onclick = () => {
+      S.prompt.editing = true;
+      S.prompt.draft = S.prompt.text;
+      applyPromptMode();
+      d.text.focus();
+      pstat("编辑中… 改完点「保存」。保存后**下一轮对话就生效，不用重启后端**。");
+    };
+
+    d.cancel.onclick = () => {
+      S.prompt.editing = false;
+      S.prompt.draft = null;
+      applyPromptMode();
+      pstat("已取消，没保存。");
+    };
+
+    d.save.onclick = async () => {
+      const text = d.text.value;
+      if (!text.trim()) {
+        pstat("✗ prompt 不能为空", true);
+        return;
+      }
+      pstat("保存中…");
+      try {
+        const r = await chrome.runtime.sendMessage({ type: "promptSave", payload: { text } });
+        if (!r?.ok) throw new Error(r?.error || "保存失败");
+        S.prompt.editing = false;
+        S.prompt.draft = null;
+        await loadPromptCurrent(
+          `✓ 已保存 ${r.chars} 字符${r.archived ? `（上一版已归档 ${r.archived}）` : ""}` +
+            (r.warning ? ` ⚠️ ${r.warning}` : "") +
+            " —— 下一轮对话就生效"
+        );
+      } catch (e) {
+        pstat("✗ " + e.message, true);
+      }
+    };
+
+    d.ver.onchange = async () => {
+      const name = d.ver.value;
+      if (!name) {
+        await loadPromptCurrent();
+        return;
+      }
+      pstat("读取历史版本…");
+      try {
+        const r = await chrome.runtime.sendMessage({ type: "promptVersion", payload: { name } });
+        if (!r?.ok) throw new Error(r?.error || "读不到这一版");
+        S.prompt.viewing = name;
+        S.prompt.editing = false;
+        S.prompt.draft = r.text;
+        applyPromptMode();
+        pstat(`正在看历史版本 ${name}（只读）· 想用它就点「恢复这一版」`);
+      } catch (e) {
+        pstat("✗ " + e.message, true);
+      }
+    };
+
+    d.restore.onclick = async () => {
+      const name = S.prompt.viewing;
+      if (!name) return;
+      pstat("恢复中…");
+      try {
+        const r = await chrome.runtime.sendMessage({ type: "promptRestore", payload: { name } });
+        if (!r?.ok) throw new Error(r?.error || "恢复失败");
+        await loadPromptCurrent(
+          `✓ 已恢复到 ${name}${r.archived ? `（当前这版已归档 ${r.archived}）` : ""} —— 下一轮对话就生效`
+        );
+      } catch (e) {
+        pstat("✗ " + e.message, true);
+      }
     };
   }
 

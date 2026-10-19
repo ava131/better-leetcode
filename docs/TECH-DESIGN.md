@@ -406,6 +406,40 @@ UI 侧要有对应的「思考中…」指示（转圈 + 累计字数），正�
 </code_history>
 ```
 
+### 4.4.1 prompt 的查看 / 修改 / 回滚（v0.10.0）
+
+**prompt 不在数据库里**（DB 存的是对话）—— 它是 `server/src/prompts/system.md` 这个文本文件，
+改它就是改代码。好处是能 `git diff`、能被 review；代价本来是"改一个字要重启"，
+由 v0.9.0 的**热重载**消掉：保存 → **下一轮对话就生效，不用重启后端、也不用刷新扩展**。
+
+侧边栏头部那个 **`SYS`** 按钮打开一个独立视图：
+
+| 能力 | 行为 |
+|---|---|
+| 看 | 打开就是**只读**（`textarea.readonly`），Status 里写明"只读（点「编辑」才能改）" |
+| 改 | 点「编辑」解锁 → 改 → 「保存」；或「取消」丢弃 |
+| 版本 | 下拉列出 `prompts/archive/` 里的所有 `.md`（`★` = 手工里程碑，其余 = 每次保存前自动归档的）；选中即**只读预览** |
+| 回滚 | 预览历史版本时出现「恢复这一版」；恢复前**先归档当前这份**，所以永远退得回来 |
+
+接口（都要求扩展来源，`originAllowed` 已挡网页）：
+
+```
+GET  /prompt?                     → { text, chars, path, versions: [{name, chars, mtimeMs, kind}] }
+GET  /prompt/version?name=xxx     → { text }
+POST /prompt        { text }      → { ok, chars, archived, warning? }
+POST /prompt/restore { name }     → { ok, chars, archived }
+```
+
+三条硬约束：
+
+1. **归档优先**：`saveSystemPrompt()` 先把当前文件复制进 `archive/edited-<时间>.md` 再覆盖，
+   归档失败也**不阻断保存**（只在返回值里标出来）—— git 之外的第二层撤销。
+2. **保存后必须 `clearPromptCache()`**：同一毫秒内写完，mtime 可能没变，光靠热重载会读到旧的。
+3. **版本名只接受 `basename` + 必须 `.md`**：`/prompt/restore` 带 `../system.md` 会 400（单测钉住了）。
+
+热重载 + 这套接口的端到端证据在 `server/test/http.ts`：
+保存后**下一轮 `/chat` 的 system 消息里真的出现了新内容**（不是"应该会"）。
+
 ### 4.5 System prompt 要点
 
 > 完整 prompt 在 `server/src/prompts/system.md`，M0 阶段用 `--dry-run` 评审。

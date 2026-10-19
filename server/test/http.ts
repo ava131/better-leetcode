@@ -108,6 +108,11 @@ const tmp = mkdtempSync(join(tmpdir(), "bl-http-"));
 const stub = await startStubLlm();
 const port = await freePort();
 
+// ★ 用临时 prompt 文件，**绝不碰用户真正在用的那一份**（下面会测保存/恢复）
+const PROMPT_FILE = join(tmp, "system.md");
+const SENTINEL = "【测试用 prompt】你是测试助手。";
+writeFileSync(PROMPT_FILE, SENTINEL, "utf8");
+
 const env = {
   ...process.env,
   PORT: String(port),
@@ -115,6 +120,7 @@ const env = {
   LLM_BASE_URL: stub.url,
   LLM_API_KEY: "test-key-not-real",
   LLM_MODEL: "stub-model",
+  BL_PROMPT_PATH: PROMPT_FILE,
 };
 
 const app = spawn(process.execPath, [SERVER], { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] });
@@ -230,7 +236,8 @@ try {
     check("第一轮发全文（有 rev=1）", String(last?.content).includes('<code rev="1"'), String(last?.content).slice(0, 300));
     check("带了光标块", String(last?.content).includes("<cursor line=\"7\""), String(last?.content).slice(0, 400));
     check("光标块里说了「不代表他问的就是这一行」", String(last?.content).includes("不代表他问的就是这一行"));
-    check("system 里用的是 stub 模型能跑的 prompt（非空）", String(sys?.content).length > 500, String(sys?.content).length);
+    // 这条同时证明 BL_PROMPT_PATH 生效了 —— 测试绝不会碰用户在用的那一份 prompt
+    check("system 里用的是 BL_PROMPT_PATH 指定的那份 prompt", String(sys?.content).includes(SENTINEL), String(sys?.content).slice(0, 160));
   }
 
   console.log("\n=== 4) 第二轮：改一行代码 → 该发增量，而且上一轮的全文还在历史里 ===");
@@ -292,6 +299,60 @@ try {
     const lp = await (await fetch(`${base}/debug/last-prompt`)).text();
     check("/debug/last-prompt 能看完整 prompt", lp.includes("MESSAGES") && lp.includes("<context>"), lp.slice(0, 120));
     check("/debug/last-prompt 标了 rev/模式", /代码 rev=2 模式=(diff|same)/.test(lp), lp.split("\n")[0]);
+  }
+
+  console.log("\n=== 5.5) system prompt：看 / 改 / 回滚（侧边栏「SYS」按钮）===");
+  {
+    const g0 = await (await fetch(`${base}/prompt`)).json();
+    check("GET /prompt 返回当前全文", g0?.text === SENTINEL, g0?.text);
+    check("带版本列表字段", Array.isArray(g0?.versions), g0?.versions);
+    check("返回文件路径（让人知道改的是哪个文件）", typeof g0?.path === "string" && g0.path.endsWith("system.md"), g0?.path);
+
+    // 空内容 → 400（别让一次手滑把 prompt 清空）
+    const empty = await fetch(`${base}/prompt`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "   " }),
+    });
+    check("保存空 prompt → 400", empty.status === 400, empty.status);
+
+    // 正常保存
+    const edited = "【测试用 prompt 第二版】\n多了一行。";
+    const sv = await fetch(`${base}/prompt`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: edited }),
+    });
+    const svj = await sv.json();
+    check("保存成功", sv.status === 200 && svj.ok === true, svj);
+    check("★ 保存前自动归档了上一版", typeof svj.archived === "string" && svj.archived.startsWith("edited-"), svj.archived);
+    const g1 = await (await fetch(`${base}/prompt`)).json();
+    check("再读就是新版", g1.text === edited, g1.text);
+    check("版本列表里多了一条", g1.versions.length >= 1, g1.versions);
+    check("能看到刚才归档的那份", g1.versions.some((v: any) => v.name === svj.archived), g1.versions);
+
+    // ★ 热重载：**不用重启**，下一轮 /chat 就该用新 prompt
+    await chat([{ role: "user", content: "随便问一句" }], "print(1)");
+    const sys = String((stub.last()?.messages ?? [])[0]?.content ?? "");
+    check("★ 下一轮真的用了新 prompt（热重载，不重启）", sys.includes("第二版"), sys.slice(0, 120));
+    check("旧 prompt 已经不在里面了", !sys.includes(SENTINEL), sys.slice(0, 120));
+
+    // 读某个历史版本
+    const vv = await (await fetch(`${base}/prompt/version?name=${encodeURIComponent(svj.archived)}`)).json();
+    check("能单独读某一版", vv?.text === SENTINEL, vv?.text);
+
+    // 回滚
+    const rs = await (await fetch(`${base}/prompt/restore`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: svj.archived }),
+    })).json();
+    check("恢复成功", rs?.ok === true, rs);
+    check("恢复后会把「被替换掉的那版」也归档", typeof rs?.archived === "string", rs?.archived);
+    const g2 = await (await fetch(`${base}/prompt`)).json();
+    check("★ 恢复后内容确实回到了旧版", g2.text === SENTINEL, g2.text);
+
+    // 非法版本名
+    const bad = await fetch(`${base}/prompt/restore`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "../system.md" }),
+    });
+    check("非法版本名（路径穿越）→ 400", bad.status === 400, bad.status);
+    const bad2 = await fetch(`${base}/prompt/version?name=${encodeURIComponent("../system.md")}`);
+    check("读版本也挡路径穿越", bad2.status === 400, bad2.status);
   }
 
   console.log("\n=== 6) CLI 真实调用不再崩（★50 就是这条抓出来的）===");

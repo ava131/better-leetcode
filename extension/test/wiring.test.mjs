@@ -234,7 +234,24 @@ console.log("\n=== 12) 光标行 + 本轮用量 ===");
   );
 }
 
-console.log("\n=== 13) 版本号别跟 manifest 走散 ===");
+console.log("\n=== 13) SYS 按钮 / prompt 视图接线 ===");
+{
+  check("头部有 SYS 按钮", SRC.includes('data-act="prompt"'));
+  check("按钮绑了开/关", SRC.includes('querySelector(\'[data-act="prompt"]\')'));
+  check("有 prompt 视图容器", SRC.includes('class="prompt"') && SRC.includes("promptEl = root.querySelector"));
+  check("默认是 readonly（锁住的）", SRC.includes('class="ptext" readonly'));
+  check("编辑/保存/取消/恢复四个按钮都在",
+    SRC.includes('class="pedit"') && SRC.includes('class="psave"') &&
+    SRC.includes('class="pcancel"') && SRC.includes('class="prestore"'));
+  check("有版本下拉", SRC.includes('class="pver"'));
+  check("四个后端消息类型都用了",
+    ["promptGet", "promptVersion", "promptSave", "promptRestore"].every((t) => SRC.includes(`type: "${t}"`)));
+  check("background 代理了四个 handler",
+    ["promptGet", "promptVersion", "promptSave", "promptRestore"].every((t) => BG.includes(`msg.type === "${t}"`)));
+  check("切 tab 会离开 prompt 视图", /promptEl && !promptEl\.hidden\) promptEl\.hidden = true/.test(SRC));
+}
+
+console.log("\n=== 14) 版本号别跟 manifest 走散 ===");
 // 面板标题旁的 vX.Y.Z 是判断"扩展到底刷没刷新"的唯一可信信号（HANDOFF §7），
 // 两处写岔了就会骗人。
 {

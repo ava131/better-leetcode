@@ -21,7 +21,15 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderMessagesForReview } from "./context.ts";
 import { loadEnv, streamChat, stripMemoryBlocks, allowedModels, defaultModel } from "./llm.ts";
-import { loadSystemPrompt, promptStatus } from "./prompt.ts";
+import {
+  loadSystemPrompt,
+  promptStatus,
+  listPromptVersions,
+  readPromptVersion,
+  saveSystemPrompt,
+  restorePromptVersion,
+  PROMPT_PATH,
+} from "./prompt.ts";
 import { resetCodeMemory, codeMemoryStats } from "./code-version.ts";
 import { resetTurnMemory, turnMemoryStats } from "./turn-memory.ts";
 import { planPrompt, planSummary } from "./prompt-plan.ts";
@@ -219,6 +227,49 @@ const server = createServer(async (req, res) => {
       resetCodeMemory();
       resetTurnMemory();
       return json(res, 200, { ok: true, note: "已清空代码版本账本，下一轮会重发全文" });
+    }
+
+    // ---------- system prompt：看 / 改 / 回滚（侧边栏那个「SYS」按钮） ----------
+    //
+    // 注意：这在**本地**把一个文件写进仓库目录，所以只允许扩展来源（originAllowed 已经挡了网页）。
+    // 保存之后靠热重载生效，**不用重启后端** —— 下一轮对话就是新 prompt。
+    if (path === "/prompt" && req.method === "GET") {
+      const text = loadSystemPrompt();
+      return json(res, 200, {
+        ok: true,
+        chars: text.length,
+        path: PROMPT_PATH,
+        versions: listPromptVersions(),
+        text,
+      });
+    }
+    if (path === "/prompt/version" && req.method === "GET") {
+      try {
+        const name = url.searchParams.get("name") || "";
+        return json(res, 200, { ok: true, name, text: readPromptVersion(name) });
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
+    if (path === "/prompt" && req.method === "POST") {
+      const body = await readBody(req);
+      try {
+        const r = saveSystemPrompt(String(body?.text ?? ""));
+        log(`[prompt] 已保存 ${r.chars} 字符（归档 ${r.archived ?? "失败"}）—— 下一轮生效，不用重启`);
+        return json(res, 200, { ok: true, ...r, path: PROMPT_PATH });
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+    }
+    if (path === "/prompt/restore" && req.method === "POST") {
+      const body = await readBody(req);
+      try {
+        const r = restorePromptVersion(String(body?.name ?? ""));
+        log(`[prompt] 已恢复到 ${body?.name}（${r.chars} 字符，归档 ${r.archived ?? "失败"}）`);
+        return json(res, 200, { ok: true, ...r, path: PROMPT_PATH });
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
     }
 
     // ---------- 调 prompt 用 ----------

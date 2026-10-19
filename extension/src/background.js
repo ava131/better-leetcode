@@ -47,6 +47,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ ok: true });
         return;
       }
+      // ---- system prompt：看 / 改 / 回滚（侧边栏「SYS」按钮）----
+      if (msg.type === "promptGet") {
+        sendResponse(await (await backend("/prompt")).json());
+        return;
+      }
+      if (msg.type === "promptVersion") {
+        const name = encodeURIComponent(msg.payload?.name || "");
+        sendResponse(await (await backend(`/prompt/version?name=${name}`)).json());
+        return;
+      }
+      if (msg.type === "promptSave") {
+        const r = await backend("/prompt", {
+          method: "POST",
+          body: JSON.stringify({ text: msg.payload?.text ?? "" }),
+        });
+        sendResponse(await r.json());
+        return;
+      }
+      if (msg.type === "promptRestore") {
+        const r = await backend("/prompt/restore", {
+          method: "POST",
+          body: JSON.stringify({ name: msg.payload?.name ?? "" }),
+        });
+        sendResponse(await r.json());
+        return;
+      }
       if (msg.type === "historyList") {
         const slug = encodeURIComponent(msg.payload?.slug || "");
         const r = await backend(`/history/list?slug=${slug}`);

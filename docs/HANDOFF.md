@@ -81,10 +81,11 @@ Node 24 自带 `node:sqlite` 和 TS 直跑，所以：**没有 package.json 依�
 | `capture-api.mjs` | 抓力扣页面自己发的 GraphQL（力扣改 schema 时用它重新确认字段） |
 | `e2e.mjs` | 端到端回归：保真 world 结构 + 真实点提交按钮 |
 | `ui-wiring.mjs` | 界面接线回归：发送按钮 / 回车 / 停止 / 拉大后仍可用 |
+| `prompt-ui.mjs` | **SYS 按钮回归**：点开是否锁住、编辑是否解锁、保存有没有真发出去、切历史版本是否只读、恢复是否带对了版本名。后端用假 `sendMessage` 顶替，**不碰你真在用的 prompt** |
 | `scroll.mjs` | **滚动跟随回归**：贴底才跟随 / 往上滚不被拽走 / `anchor()` 停在回答开头 / 真滚轮能停住。后端用假流式回复，**不花 API 额度、不碰账号** |
 | `selfcheck.mjs` | **不开浏览器**，只对"生成出来要注入页面的代码"跑 `node --check`（★44 就是它守的坑） |
 | `prompts/archive/` | **改 `system.md` 之前先把当前版复制进去**（`system.v<版本>.md`）。prompt 是最该当「代码」对待的东西，而它的效果没法靠单测验证 —— 只能靠「上一版长什么样」来对照 |
-| `server/src/prompt.ts` | system prompt 的加载 + **热重载**（按 mtime 缓存）。改 prompt **不用重启后端**了 |
+| `server/src/prompt.ts` | system prompt 的加载 + **热重载**（按 mtime 缓存）+ **看/改/回滚**（保存/恢复前自动归档、路径穿越防护）。改 prompt **不用重启后端** |
 | `server/test/http.ts` | **HTTP 集成测试**：真起服务 + 打桩上游 LLM。★49/★50 那一类「单测全绿、真跑就炸」就是它守的 |
 | `scroll.mjs` 同级还有 `server/test/diff.ts` / `prompt-order.ts` | 见下面 server 那一节 |
 
@@ -268,6 +269,19 @@ node tools/probe/scroll.mjs         # 滚动跟随（含"发一条"的假流式�
 
 ## 10. 下一步该做什么
 
+### 改 prompt 现在可以直接在侧边栏里改
+
+头部 **`SYS`** 按钮 → 只读看当前 prompt → 「编辑」→ 改 → 「保存」→ **下一轮生效，不用重启**。
+下拉里是 `prompts/archive/` 的所有版本（`★` 是手工里程碑，其余是每次保存前自动归档的），
+选中可只读预览，点「恢复这一版」就回去（恢复前也会先把当前这份归档）。
+
+改 prompt 的验收方式（**别凭感觉，也别只看一次**）：
+
+```bash
+node tools/probe/prompt-ui.mjs        # 先把这条交互链验一遍（不碰真的 prompt）
+curl -s localhost:8787/prompt | head  # 看当前这份和版本列表
+```
+
 ### 一条命令跑全部
 
 ```bash
@@ -331,6 +345,13 @@ v0.9.1 的实测：旧 prompt 复盘组 **0/2** 给完整代码；新 prompt 复
 - **修「运行过也不给代码」**（★52）：把"状态判断"提到 prompt 总纲，复盘阶段明确要求给完整代码
 - **修用量显示**：`缓存 <b>83%</b>` 原样显示 —— 因为把 HTML 塞进了 `textContent`，改成用 DOM 节点拼
 - 归档 `archive/system.v0.9.0.md`（这次是**先复制再改**的）
+
+### v0.10.0（2026-10-19）
+
+- 侧边栏 **`SYS`** 按钮：看 / 改 / 版本下拉 / 回滚 prompt，默认**锁住**
+- 保存 → 热重载生效，**不用重启后端、也不用刷新扩展**
+- 每次保存/恢复前自动归档，`/prompt/restore` 挡路径穿越
+- 新探针 `tools/probe/prompt-ui.mjs`（25 项，全用假后端，不碰真文件）
 
 ### 里程碑上真正欠的两笔（比继续优化更要紧）
 

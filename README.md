@@ -61,11 +61,19 @@
 
 **保持这个窗口开着。关掉窗口 = 停止后端。**
 
-**方式 B**：终端里
+**方式 B**：终端里（跟方式 A 等价，跑的是同一个脚本）
 
 ```bash
-cd server && node src/index.ts
+cd better-leetcode
+bash start.sh          # 或者 bash start.command，两个名字都行
 ```
+
+它会自己检查 Node 版本、`.env`、端口占用；**端口已经有人占着**时会直接告诉你
+pid 和 `kill` 命令，不会卡住等按键。按 **Ctrl-C** 停止（会正常显示「已停止」，
+不是报错）。
+
+> 改了 `server/src/*.ts` 要重跑这个脚本；**改 system prompt 不用**（热重载，
+> 侧边栏的 `SYS` 按钮保存就生效）。
 
 > `.env` 已经配好了（DeepSeek + `deepseek-v4-pro`）。要换别家模型就改 `.env` 里的
 > `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_MODELS`。
@@ -177,7 +185,8 @@ MEMORY_DB=./.dev-memory.db node test/smoke.ts
 ## 目录
 
 ```
-start.command         ← 双击启动后端
+start.command         ← 双击启动后端（终端里 bash start.command）
+start.sh              ← 同上，只是名字好记一点
 docs/
   PRD.md              需求与交互设计（先读这个）
   TECH-DESIGN.md      技术设计：架构、接口、schema、15 个坑、模型选型

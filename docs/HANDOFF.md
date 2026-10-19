@@ -94,8 +94,9 @@ Node 24 自带 `node:sqlite` 和 TS 直跑，所以：**没有 package.json 依�
 ## 3. 怎么跑
 
 ```bash
-# 起后端（或双击根目录 start.command）
-cd server && node src/index.ts
+# 起后端（三种等价写法，推荐第一种 —— 它会检查 node 版本/.env/端口）
+bash start.sh                 # 或 bash start.command；或 Finder 里双击 start.command
+cd server && node src/index.ts   # 裸跑
 
 # 不花钱看 prompt —— 最该先做的事
 cd server && node src/cli.ts --dry-run fixtures/linked-list-cycle.json
@@ -111,7 +112,16 @@ cd server && MEMORY_DB=./.dev-memory.db node test/smoke.ts
 cd server && MEMORY_DB=./.dev-memory.db node test/history.ts
 ```
 
-**当前测试状态（全绿）**：history 31 / smoke 8 / wiring 17 / markdown 47 / background 9。
+**当前测试状态（全绿）**：selfcheck 14 / diff 27 / prompt-order 26 / http 57 /
+smoke 15 / history 31 / wiring 54 / markdown 47 / background 9（共 280）。
+另有真浏览器探针：`ui-wiring` 16 / `scroll` 27 / `prompt-ui` 25。
+
+**`start.sh` 里踩过的两个 bash 坑**（都测出来了才改的）：
+
+- `$PORT` 后面紧跟**全角标点**时，非 UTF-8 locale 的 bash 会把标点的字节拼进变量名
+  → `PORT?: unbound variable`。所以脚本里变量**一律写 `${VAR}`**。
+- `lsof -i:tcp:8787` 不带 `-sTCP:LISTEN` 会连**浏览器连过来的客户端 socket**一起列出来
+  （Chrome 的 CLOSE_WAIT），看着像"有两个后端在跑"。只查 LISTEN。
 
 ---
 
